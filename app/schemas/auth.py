@@ -25,6 +25,12 @@ class UserBrief(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AppleSignInRequest(BaseModel):
+    identity_token: str
+    authorization_code: str | None = None
+    user_info: dict | None = None  # First-time sign in includes name
+
+
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"

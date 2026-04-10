@@ -5,7 +5,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
 from app.core.response import success_response, error_response
-from app.schemas.auth import SignupRequest, LoginRequest, AuthResponse, UserBrief
+from app.schemas.auth import SignupRequest, LoginRequest, AuthResponse, UserBrief, AppleSignInRequest
 from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -56,3 +56,24 @@ def get_me(current_user: User = Depends(get_current_user)):
 @router.post("/logout")
 def logout(current_user: User = Depends(get_current_user)):
     return success_response(message="Logged out successfully")
+
+
+@router.post("/apple")
+async def apple_signin(body: AppleSignInRequest, db: Session = Depends(get_db)):
+    """Sign in with Apple"""
+    svc = AuthService(db)
+    try:
+        user, token = await svc.apple_signin(
+            identity_token=body.identity_token,
+            authorization_code=body.authorization_code,
+            user_info=body.user_info
+        )
+    except ValueError as e:
+        return error_response("APPLE_AUTH_FAILED", str(e), 401)
+
+    auth_data = AuthResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserBrief.model_validate(user),
+    )
+    return success_response(data=auth_data.model_dump(), message="Apple Sign In successful")

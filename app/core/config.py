@@ -18,6 +18,12 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
+    # Apple Sign In
+    APPLE_TEAM_ID: str = ""
+    APPLE_KEY_ID: str = ""
+    APPLE_BUNDLE_ID: str = ""
+    APPLE_PRIVATE_KEY_PATH: str = "./apple_private_key.p8"
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
