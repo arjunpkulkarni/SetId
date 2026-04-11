@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,153 +6,176 @@ import {
   Image,
   TouchableOpacity,
   StyleSheet,
-  Dimensions,
   Platform,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, radii, shadows, spacing } from '../theme';
+import { useFocusEffect } from '@react-navigation/native';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { colors, radii, shadows } from '../theme';
+import { useAuth } from '../contexts/AuthContext';
+import { dashboard as dashboardApi, notifications as notificationsApi } from '../services/api';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const ACTIVITY_TYPE_META = {
+  bill_created: { icon: 'receipt-long', positive: true },
+  payment_received: { icon: 'arrow-downward', positive: true },
+  payment_sent: { icon: 'arrow-upward', positive: false },
+  member_joined: { icon: 'person-add', positive: true },
+  receipt_parsed: { icon: 'document-scanner', positive: true },
+};
 
-const AVATAR_URLS = [
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuBYLmd0VIxB-yqNOZYE5J3nfTBJIL1xOlT3bLhEdzz0uby2GUFny-G8x29r0TsDvXwy10TMWDXr7grX3d85sC_S8II-uDRsLMcIIk_WmLmVTbEXMDtxHN8BHbabhhQ_u98KZnw_5-RvBi8s55yuXvTFdisZPFXaajqT5j-bPssoTWz9T9yAg0fgRSeorXDlFyk_94RD-T34hVuI3Rewgjvtdlg47Zr_rHZdwzU4ycMmcVZ_wH2AW-lp6KjQ7gvdtvTGECMvx_uF',
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuALBynKcZ2zAfZXmMosryjI7bKzm63L8-uh56nHFFxgoXd-wnYJ8Idxwl-5ZQOWVOzL3EexU-zhaicDw46fAhASygOJkX7xZ9UjMkrpogho90ozA2CXLcPIOmpZZ0ade_4wCijdSmiGKFHM_KjH6nsH77hfb1bLYCkkXY4oEFb1hRvVKnAL5GzZp_zFDU_ZM13MPCtHUeIbZUdcK1orNyenx5ifv2mx-Jf1i2duODq_oiMM64OfiU-BcUP1_LGVl1veeaLoCQU-',
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuA_41JOXkyhaJ_Xn8N-qlkwfZCg5XHHS6JC5M2WdblKrNGkIrpNopGts-xy0JDGGjYp0p8mHb-NgeuUWBYdAffVFFvMfKGymTT0r3AUxIpVu5OCRl-B_mR9N-GXDQsyY7GcGUnGvuWYf2300syGHnrebLhOn1LnJfqxBl4dsOTEslYuSrpCSNpcpy_TvKLy5DQI2Niy15HWTAWd2MPoU5lvQOEL2U9ZYSSZLlQdPXyiJ1marpgHthRfyEZILOdAhig6LCZZ93x5',
-];
+function formatCurrency(value) {
+  const num = typeof value === 'string' ? parseFloat(value) : value;
+  if (num == null || isNaN(num)) return '$0.00';
+  return `$${Math.abs(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
 
-const PROFILE_URL =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuBPVqPqKe3UPsOPFyxVrVrEcM8dkxixaNRZHHMFRfgXtVAmDdLs8FKfSTdj5xKA5GfDQ3_8tIJHy05RnXx6t-Dk_yX6tOjX3BqyXo7u4CS-90rOFCGYzf4ONoJzf9E8mx0UBKYRCS9h-3IXlCngwsCGsauul2KyGDq7cf10JPI5tSHJ3shFQrFyQZBg4ryv0nuz74NhX0fUIGAm1ZTOos3LJgxHJpK7-AjDC90-UjvzUCeBav5Y-OuDkhDJmSEQKbytfn3YEnA8';
+function formatRelativeTime(timestamp) {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
 
-const BILLS = [
-  {
-    id: '1',
-    title: 'Starbucks Mornings',
-    subtitle: 'Ongoing \u2022 3 members',
-    amount: '$42.50',
-    icon: 'local-cafe',
-    iconColor: colors.secondary,
-  },
-  {
-    id: '2',
-    title: 'Weekly Groceries',
-    subtitle: 'Shared with Sarah',
-    amount: '$128.15',
-    icon: 'shopping-bag',
-    iconColor: colors.primary,
-  },
-];
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 
-const ACTIVITY = [
-  {
-    id: '1',
-    title: 'Sushi Corner',
-    date: 'Yesterday, 8:30 PM',
-    amount: '+$12.50',
-    status: 'Settled',
-    icon: 'restaurant-menu',
-    positive: true,
-  },
-  {
-    id: '2',
-    title: 'Blue Bottle Caf\u00e9',
-    date: 'Aug 24, 10:15 AM',
-    amount: '-$8.40',
-    status: 'Pending',
-    icon: 'local-cafe',
-    positive: false,
-  },
-  {
-    id: '3',
-    title: 'Cineplex Cinema',
-    date: 'Aug 22, 11:00 PM',
-    amount: '+$45.00',
-    status: 'Settled',
-    icon: 'movie',
-    positive: true,
-  },
-];
+// ─── Sub-components ──────────────────────────────────────────────────────────
 
-const NAV_ITEMS = [
-  { key: 'dashboard', label: 'Dashboard', icon: 'dashboard', active: true },
-  { key: 'activity', label: 'Activity', icon: 'receipt-long', active: false },
-  { key: 'profile', label: 'Profile', icon: 'person', active: false },
-];
+function TopAppBar({ insets, user, onNotificationsPress, unreadCount }) {
+  const initials = (user?.full_name || '?')
+    .split(' ')
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
 
-function TopAppBar({ insets }) {
   return (
     <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
       <View style={styles.topBarInner}>
         <View style={styles.profileRow}>
           <View style={styles.avatarContainer}>
-            <Image source={{ uri: PROFILE_URL }} style={styles.profileAvatar} />
+            {user?.avatar_url ? (
+              <Image source={{ uri: user.avatar_url }} style={styles.profileAvatar} />
+            ) : (
+              <View style={[styles.profileAvatar, styles.initialsAvatar]}>
+                <Text style={styles.initialsText}>{initials}</Text>
+              </View>
+            )}
           </View>
           <View>
             <Text style={styles.welcomeLabel}>Welcome back,</Text>
-            <Text style={styles.userName}>Morning Hakim</Text>
+            <Text style={styles.userName}>{user?.full_name || 'User'}</Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.iconButton} activeOpacity={0.7}>
-          <MaterialIcons name="notifications-none" size={24} color={colors.onSurface} />
+        <TouchableOpacity
+          style={styles.iconButtonWrap}
+          activeOpacity={0.7}
+          onPress={onNotificationsPress}
+        >
+          <MaterialIcons
+            name={unreadCount > 0 ? 'notifications-active' : 'notifications-none'}
+            size={24}
+            color={colors.onSurface}
+          />
+          {unreadCount > 0 ? (
+            <View style={styles.notifBadge}>
+              <Text style={styles.notifBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+            </View>
+          ) : null}
         </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-function BalanceHero() {
+function BalanceHero({ overview }) {
+  const owedToYou = parseFloat(overview?.total_owed_to_you ?? 0);
+  const youOwe = parseFloat(overview?.total_you_owe ?? 0);
+  const net = owedToYou - youOwe;
+  const badgeText = net >= 0
+    ? `+${formatCurrency(net)} owed to you`
+    : `-${formatCurrency(net)} you owe`;
+
   return (
     <View style={styles.balanceHero}>
       <Text style={styles.balanceLabel}>Current Balance</Text>
-      <Text style={styles.balanceAmount}>$1,452.80</Text>
+      <Text style={styles.balanceAmount}>
+        {net < 0 ? '-' : ''}{formatCurrency(net)}
+      </Text>
       <View style={styles.badgeRow}>
-        <View style={styles.weeklyBadge}>
-          <Text style={styles.weeklyBadgeText}>+$240 this week</Text>
+        <View style={[styles.weeklyBadge, net < 0 && styles.weeklyBadgeNegative]}>
+          <Text style={[styles.weeklyBadgeText, net < 0 && styles.weeklyBadgeTextNegative]}>
+            {badgeText}
+          </Text>
         </View>
       </View>
     </View>
   );
 }
 
-function AvatarStack() {
+function MemberCountBubbles({ count }) {
+  const shown = Math.min(count, 3);
+  const extra = count - shown;
   return (
     <View style={styles.avatarStack}>
-      {AVATAR_URLS.map((url, i) => (
-        <Image
+      {Array.from({ length: shown }).map((_, i) => (
+        <View
           key={i}
-          source={{ uri: url }}
           style={[
             styles.stackAvatar,
-            { marginLeft: i === 0 ? 0 : -12, zIndex: AVATAR_URLS.length - i },
+            styles.placeholderAvatar,
+            { marginLeft: i === 0 ? 0 : -12, zIndex: shown - i },
           ]}
-        />
+        >
+          <MaterialIcons name="person" size={18} color={colors.onSurfaceVariant} />
+        </View>
       ))}
-      <View style={[styles.stackOverflow, { marginLeft: -12 }]}>
-        <Text style={styles.stackOverflowText}>+2</Text>
-      </View>
+      {extra > 0 && (
+        <View style={[styles.stackOverflow, { marginLeft: -12 }]}>
+          <Text style={styles.stackOverflowText}>+{extra}</Text>
+        </View>
+      )}
     </View>
   );
 }
 
-function FeaturedBillCard({ onSettle }) {
+function FeaturedBillCard({ bill, onSettle }) {
+  if (!bill) return null;
+  const remaining = parseFloat(bill.remaining ?? bill.total ?? 0);
+
   return (
     <View style={[styles.featuredCard, shadows.card]}>
       <View style={styles.featuredCardTop}>
         <View style={styles.featuredIconWrap}>
-          <MaterialIcons name="restaurant" size={24} color={colors.tertiary} />
+          <MaterialIcons name="receipt-long" size={24} color={colors.tertiary} />
         </View>
-        <View style={styles.priorityBadge}>
-          <Text style={styles.priorityText}>High Priority</Text>
-        </View>
+        {remaining > 50 && (
+          <View style={styles.priorityBadge}>
+            <Text style={styles.priorityText}>High Priority</Text>
+          </View>
+        )}
       </View>
-      <Text style={styles.featuredTitle}>Dinner at Taco Bar</Text>
-      <Text style={styles.featuredSubtitle}>Split between 5 people</Text>
+      <Text style={styles.featuredTitle} numberOfLines={1}>
+        {bill.title || bill.merchant_name || 'Untitled Bill'}
+      </Text>
+      <Text style={styles.featuredSubtitle}>
+        Split between {bill.member_count} {bill.member_count === 1 ? 'person' : 'people'}
+      </Text>
       <View style={styles.featuredBottom}>
-        <AvatarStack />
+        <MemberCountBubbles count={bill.member_count} />
         <View style={styles.settleRow}>
-          <Text style={styles.featuredAmount}>$245.00</Text>
-          <TouchableOpacity activeOpacity={0.85} onPress={onSettle}>
+          <Text style={styles.featuredAmount}>{formatCurrency(remaining)}</Text>
+          <TouchableOpacity activeOpacity={0.85} onPress={() => onSettle(bill)}>
             <LinearGradient
               colors={[colors.secondary, colors.secondaryDim]}
               start={{ x: 0, y: 0 }}
@@ -172,29 +195,52 @@ function SecondaryBillCard({ bill }) {
   return (
     <View style={styles.secondaryCard}>
       <View style={styles.secondaryIconWrap}>
-        <MaterialIcons name={bill.icon} size={22} color={bill.iconColor} />
+        <MaterialIcons name="receipt-long" size={22} color={colors.secondary} />
       </View>
       <View style={styles.secondaryInfo}>
-        <Text style={styles.secondaryTitle}>{bill.title}</Text>
-        <Text style={styles.secondarySubtitle}>{bill.subtitle}</Text>
+        <Text style={styles.secondaryTitle} numberOfLines={1}>
+          {bill.title || bill.merchant_name || 'Untitled'}
+        </Text>
+        <Text style={styles.secondarySubtitle}>
+          {bill.status} • {bill.member_count} {bill.member_count === 1 ? 'member' : 'members'}
+        </Text>
       </View>
-      <Text style={styles.secondaryAmount}>{bill.amount}</Text>
+      <Text style={styles.secondaryAmount}>{formatCurrency(bill.remaining ?? bill.total)}</Text>
     </View>
   );
 }
 
-function ActiveBillsSection({ onSettle }) {
+function ActiveBillsSection({ bills, onSettle }) {
+  if (!bills || bills.length === 0) {
+    return (
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Active Bills</Text>
+        </View>
+        <View style={[styles.emptyCard, shadows.card]}>
+          <MaterialIcons name="receipt-long" size={40} color={colors.outlineVariant} />
+          <Text style={styles.emptyText}>No active bills</Text>
+          <Text style={styles.emptySubtext}>Tap + to create your first bill</Text>
+        </View>
+      </View>
+    );
+  }
+
+  const [featured, ...rest] = bills;
+
   return (
     <View style={styles.section}>
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>Active Bills</Text>
-        <TouchableOpacity activeOpacity={0.7}>
-          <Text style={styles.viewAllText}>View All</Text>
-        </TouchableOpacity>
+        {bills.length > 3 && (
+          <TouchableOpacity activeOpacity={0.7}>
+            <Text style={styles.viewAllText}>View All</Text>
+          </TouchableOpacity>
+        )}
       </View>
-      <FeaturedBillCard onSettle={onSettle} />
-      <View style={styles.secondaryBillsGap} />
-      {BILLS.map((bill) => (
+      <FeaturedBillCard bill={featured} onSettle={onSettle} />
+      {rest.length > 0 && <View style={styles.secondaryBillsGap} />}
+      {rest.slice(0, 3).map((bill) => (
         <React.Fragment key={bill.id}>
           <SecondaryBillCard bill={bill} />
           <View style={styles.billCardGap} />
@@ -205,6 +251,10 @@ function ActiveBillsSection({ onSettle }) {
 }
 
 function ActivityItem({ item, isLast, onPress }) {
+  const meta = ACTIVITY_TYPE_META[item.type] || { icon: 'info', positive: true };
+  const hasAmount = item.amount != null;
+  const positive = meta.positive;
+
   return (
     <TouchableOpacity
       activeOpacity={0.7}
@@ -212,37 +262,55 @@ function ActivityItem({ item, isLast, onPress }) {
       style={[styles.activityItem, !isLast && styles.activityItemBorder]}
     >
       <View style={styles.activityIconWrap}>
-        <MaterialIcons name={item.icon} size={20} color={colors.onSurfaceVariant} />
+        <MaterialIcons name={meta.icon} size={20} color={colors.onSurfaceVariant} />
       </View>
       <View style={styles.activityInfo}>
-        <Text style={styles.activityTitle}>{item.title}</Text>
-        <Text style={styles.activityDate}>{item.date}</Text>
+        <Text style={styles.activityTitle} numberOfLines={1}>
+          {item.bill_title || item.description}
+        </Text>
+        <Text style={styles.activityDate}>{formatRelativeTime(item.timestamp)}</Text>
       </View>
       <View style={styles.activityRight}>
-        <Text
-          style={[
-            styles.activityAmount,
-            { color: item.positive ? colors.secondary : colors.error },
-          ]}
-        >
-          {item.amount}
+        {hasAmount && (
+          <Text
+            style={[
+              styles.activityAmount,
+              { color: positive ? colors.secondary : colors.error },
+            ]}
+          >
+            {positive ? '+' : '-'}{formatCurrency(item.amount)}
+          </Text>
+        )}
+        <Text style={styles.activityStatus}>
+          {item.type.replace(/_/g, ' ')}
         </Text>
-        <Text style={styles.activityStatus}>{item.status}</Text>
       </View>
     </TouchableOpacity>
   );
 }
 
-function RecentActivitySection({ onItemPress }) {
+function RecentActivitySection({ activities, onItemPress }) {
+  if (!activities || activities.length === 0) {
+    return (
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Recent Activity</Text>
+        <View style={[styles.emptyCard, shadows.card]}>
+          <MaterialIcons name="history" size={40} color={colors.outlineVariant} />
+          <Text style={styles.emptyText}>No recent activity</Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>Recent Activity</Text>
       <View style={[styles.activityCard, shadows.card]}>
-        {ACTIVITY.map((item, i) => (
+        {activities.map((item, i) => (
           <ActivityItem
-            key={item.id}
+            key={`${item.type}-${item.timestamp}-${i}`}
             item={item}
-            isLast={i === ACTIVITY.length - 1}
+            isLast={i === activities.length - 1}
             onPress={() => onItemPress(item)}
           />
         ))}
@@ -251,12 +319,12 @@ function RecentActivitySection({ onItemPress }) {
   );
 }
 
-function FloatingActionButton({ bottomInset, onPress }) {
+function FloatingActionButton({ tabBarHeight, onPress }) {
   return (
     <TouchableOpacity
       activeOpacity={0.85}
       onPress={onPress}
-      style={[styles.fab, shadows.fab, { bottom: bottomInset + 88 }]}
+      style={[styles.fab, shadows.fab, { bottom: tabBarHeight + 16 }]}
     >
       <LinearGradient
         colors={[colors.secondary, colors.secondaryDim]}
@@ -270,66 +338,126 @@ function FloatingActionButton({ bottomInset, onPress }) {
   );
 }
 
-function BottomNavBar({ insets }) {
-  return (
-    <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-      {NAV_ITEMS.map((item) => (
-        <TouchableOpacity
-          key={item.key}
-          style={[styles.navItem, item.active && styles.navItemActive]}
-          activeOpacity={0.7}
-        >
-          <MaterialIcons
-            name={item.icon}
-            size={24}
-            color={item.active ? colors.secondary : colors.outlineVariant}
-          />
-          <Text style={[styles.navLabel, item.active && styles.navLabelActive]}>
-            {item.label}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-}
+// ─── Main Screen ─────────────────────────────────────────────────────────────
 
 export default function DashboardScreen({ navigation }) {
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
+  const { user } = useAuth();
 
-  const handleSettle = () => {
-    navigation.navigate('BillSplit');
+  const [overview, setOverview] = useState(null);
+  const [activeBills, setActiveBills] = useState([]);
+  const [recentActivity, setRecentActivity] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [overviewRes, billsRes, activityRes] = await Promise.all([
+        dashboardApi.getOverview(),
+        dashboardApi.getActiveBills(),
+        dashboardApi.getRecentActivity(),
+      ]);
+      setOverview(overviewRes.data);
+      setActiveBills(billsRes.data ?? []);
+      setRecentActivity(activityRes.data ?? []);
+    } catch {
+      // silently fail — show whatever data we have
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData().finally(() => setLoading(false));
+  }, [fetchData]);
+
+  const fetchUnread = useCallback(async () => {
+    try {
+      const res = await notificationsApi.list(true);
+      setUnreadCount((res.data ?? []).length);
+    } catch {
+      setUnreadCount(0);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchUnread();
+    }, [fetchUnread]),
+  );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([fetchData(), fetchUnread()]);
+    setRefreshing(false);
+  }, [fetchData, fetchUnread]);
+
+  const handleSettle = (bill) => {
+    navigation.navigate('BillSplit', { billId: bill.id });
   };
+
+  if (loading) {
+    return (
+      <View style={[styles.root, styles.centered]}>
+        <ActivityIndicator size="large" color={colors.secondary} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>
-      <TopAppBar insets={insets} />
+      <TopAppBar
+        insets={insets}
+        user={user}
+        unreadCount={unreadCount}
+        onNotificationsPress={() => navigation.navigate('Notifications')}
+      />
 
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: insets.top + 72, paddingBottom: insets.bottom + 100 },
+          { paddingTop: insets.top + 72, paddingBottom: tabBarHeight + 88 },
         ]}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.secondary}
+          />
+        }
       >
-        <BalanceHero />
-        <ActiveBillsSection onSettle={handleSettle} />
-        <RecentActivitySection onItemPress={() => navigation.navigate('ActivityDetail')} />
+        <BalanceHero overview={overview} />
+        <ActiveBillsSection bills={activeBills} onSettle={handleSettle} />
+        <RecentActivitySection
+          activities={recentActivity}
+          onItemPress={(item) => {
+            if (item.bill_id) navigation.navigate('ActivityDetail', { billId: item.bill_id });
+          }}
+        />
       </ScrollView>
 
-      <FloatingActionButton bottomInset={insets.bottom} onPress={() => navigation.navigate('ScanReceipt')} />
-      <BottomNavBar insets={insets} />
+      <FloatingActionButton
+        tabBarHeight={tabBarHeight}
+        onPress={() => navigation.navigate('CreateBill')}
+      />
     </View>
   );
 }
+
+// ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.background,
   },
+  centered: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-  // Top App Bar
   topBar: {
     position: 'absolute',
     top: 0,
@@ -365,6 +493,18 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
   },
+  initialsAvatar: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.secondaryContainer,
+    borderRadius: 20,
+  },
+  initialsText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.secondary,
+  },
   welcomeLabel: {
     fontFamily: 'Inter_500Medium',
     fontSize: 11,
@@ -380,11 +520,29 @@ const styles = StyleSheet.create({
     letterSpacing: -0.3,
     color: colors.onSurface,
   },
-  iconButton: {
+  iconButtonWrap: {
     padding: 8,
+    position: 'relative',
+  },
+  notifBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: colors.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  notifBadgeText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.onError,
   },
 
-  // Scroll
   scroll: {
     flex: 1,
   },
@@ -392,7 +550,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
 
-  // Balance Hero
   balanceHero: {
     alignItems: 'center',
     paddingVertical: 32,
@@ -423,14 +580,19 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: radii.full,
   },
+  weeklyBadgeNegative: {
+    backgroundColor: colors.errorContainer,
+  },
   weeklyBadgeText: {
     fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
     fontWeight: '600',
     color: colors.onSecondaryContainer,
   },
+  weeklyBadgeTextNegative: {
+    color: colors.error,
+  },
 
-  // Sections
   section: {
     marginBottom: 32,
   },
@@ -454,7 +616,25 @@ const styles = StyleSheet.create({
     color: colors.secondary,
   },
 
-  // Featured Bill Card
+  emptyCard: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: radii.xl,
+    padding: 32,
+    alignItems: 'center',
+    gap: 8,
+  },
+  emptyText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.onSurfaceVariant,
+  },
+  emptySubtext: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: colors.outlineVariant,
+  },
+
   featuredCard: {
     backgroundColor: colors.surfaceContainerLowest,
     borderRadius: radii.xl,
@@ -525,7 +705,6 @@ const styles = StyleSheet.create({
     color: colors.onSecondary,
   },
 
-  // Avatar Stack
   avatarStack: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -536,6 +715,11 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 3,
     borderColor: colors.surfaceContainerLowest,
+  },
+  placeholderAvatar: {
+    backgroundColor: colors.surfaceContainer,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   stackOverflow: {
     width: 40,
@@ -554,7 +738,6 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
   },
 
-  // Secondary Bill Cards
   secondaryBillsGap: {
     height: 12,
   },
@@ -599,7 +782,6 @@ const styles = StyleSheet.create({
     color: colors.onSurface,
   },
 
-  // Activity
   activityCard: {
     backgroundColor: colors.surfaceContainerLowest,
     borderRadius: radii.xl,
@@ -657,7 +839,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // FAB
   fab: {
     position: 'absolute',
     right: 24,
@@ -669,48 +850,5 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-
-  // Bottom Nav
-  bottomNav: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    zIndex: 50,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingTop: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.85)',
-    ...Platform.select({
-      ios: {},
-      android: { backgroundColor: 'rgba(255, 255, 255, 0.95)' },
-    }),
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    ...shadows.ambient,
-  },
-  navItem: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    borderRadius: 16,
-  },
-  navItemActive: {
-    backgroundColor: 'rgba(0, 108, 92, 0.08)',
-  },
-  navLabel: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 11,
-    fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 1.5,
-    marginTop: 4,
-    color: colors.outlineVariant,
-  },
-  navLabelActive: {
-    color: colors.secondary,
   },
 });

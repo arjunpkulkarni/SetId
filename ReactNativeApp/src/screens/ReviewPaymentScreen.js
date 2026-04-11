@@ -1,42 +1,38 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
   ScrollView,
-  Image,
   TouchableOpacity,
   StyleSheet,
   Platform,
   Alert,
+  ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, shadows } from '../theme';
+import { useAuth } from '../contexts/AuthContext';
+import { bills as billsApi, assignments as assignmentsApi, payments as paymentsApi } from '../services/api';
 
-const SUBTOTAL = 13.05;
 const SERVICE_FEE_RATE = 0.03;
-const TAX_RATE = 0.10;
-const SERVICE_FEE = parseFloat((SUBTOTAL * SERVICE_FEE_RATE).toFixed(2));
-const TAX = parseFloat((SUBTOTAL * TAX_RATE).toFixed(2));
+const TAX_RATE = 0.1;
 
 const TIP_OPTIONS = [
   { label: '15%', value: 0.15 },
   { label: '18%', value: 0.18 },
-  { label: '20%', value: 0.20 },
+  { label: '20%', value: 0.2 },
   { label: '25%', value: 0.25 },
   { label: 'CUSTOM', value: 'custom' },
 ];
 
-const PARTICIPANT_AVATARS = [
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuDqtrTR39cQ7b0XQ8mxVOmLymuC64xlypncTrrCNt5cx9sO31SvTG5s0aDfcakGG2TfBtTKhrD4CYSW-nHRXVIEuJP8-OlfOL06dj6PAtdSIr2jovuMKYoLS_kt4fVAi_mTwjku14OatOAg7uXDOyAeTYNDAqgP69gmRU2LG-zc8Ozbwl6tl4RZ6t4uXkjAMWaPxllyxkwPhpA80XppWhN2eGyUVcE3aBDgIv6esKKZlvbpPHwPraEc2d9OtV7hxdyVbc8aNnzk',
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuBBXU8CfIgtW6cIOu-UFuLExkHc8V6-kCfusNxMv6zsWCBmOrQl8Z-wPOm4beJObyx4-aw5OECl9T2zYLkudxhxL2qWFuY5Km_pZaRzM-clfY-5znfP_kEPjLqJ1KzYxVuzTsml6m2S9JmaFsR63YiQ8M8jVbC5HGXJ-9NGdLxknleU__T7fFfM_7OK9wC2lB7oWkQg_asrfsImi5W9zTDpvoYekeMRFhar1WgyPssXeNXmRukCWPmc66fq405U1Q5RPSJ7GQaE',
-];
-
-const LINE_ITEMS = [
-  { name: 'Iced Vanilla Latte', desc: 'Regular milk, extra shot', price: 5.80 },
-  { name: 'Avocado Smash Toast (Shared)', desc: 'Split with 1 person', price: 7.25 },
-];
+function formatMoney(n) {
+  const x = typeof n === 'string' ? parseFloat(n) : Number(n);
+  if (Number.isNaN(x)) return '$0.00';
+  return `$${x.toFixed(2)}`;
+}
 
 function TopBar({ insets, onBack }) {
   return (
@@ -45,35 +41,34 @@ function TopBar({ insets, onBack }) {
         <MaterialIcons name="arrow-back" size={24} color={colors.onSurfaceVariant} />
       </TouchableOpacity>
       <Text style={styles.topBarTitle}>Review Payment</Text>
-      <TouchableOpacity style={styles.topBarBtn} activeOpacity={0.7}>
-        <MaterialIcons name="more-vert" size={24} color={colors.onSurfaceVariant} />
-      </TouchableOpacity>
+      <View style={styles.topBarBtn} />
     </View>
   );
 }
 
-function MerchantHero() {
+function MerchantHero({ bill, memberNickname }) {
+  const name = bill?.merchant_name || bill?.title || 'Bill';
   return (
     <View style={styles.heroSection}>
       <View style={styles.heroIcon}>
-        <MaterialIcons name="local-cafe" size={36} color={colors.secondary} />
+        <MaterialIcons name="receipt-long" size={36} color={colors.secondary} />
       </View>
-      <Text style={styles.heroName}>Brew District Caf\u00e9</Text>
+      <Text style={styles.heroName}>{name}</Text>
       <Text style={styles.heroDesc}>
-        Your share of the bill for breakfast with Morning Hakim.
+        Your share{memberNickname ? ` (${memberNickname})` : ''} — review and pay below.
       </Text>
     </View>
   );
 }
 
-function ReceiptLineItem({ item }) {
+function ReceiptLineItem({ name, amount }) {
   return (
     <View style={styles.lineItem}>
       <View style={styles.lineItemLeft}>
-        <Text style={styles.lineItemName}>{item.name}</Text>
-        <Text style={styles.lineItemDesc}>{item.desc}</Text>
+        <Text style={styles.lineItemName}>{name}</Text>
+        <Text style={styles.lineItemDesc}>Assigned to you</Text>
       </View>
-      <Text style={styles.lineItemPrice}>${item.price.toFixed(2)}</Text>
+      <Text style={styles.lineItemPrice}>{formatMoney(amount)}</Text>
     </View>
   );
 }
@@ -86,7 +81,7 @@ function DashedDivider() {
   return <View style={styles.dashedDivider} />;
 }
 
-function TipSelector({ selectedTip, onSelect }) {
+function TipSelector({ selectedTip, onSelect, customAmount, onCustomChange }) {
   return (
     <View style={styles.tipSection}>
       <Text style={styles.tipLabel}>ADD A TIP</Text>
@@ -116,6 +111,16 @@ function TipSelector({ selectedTip, onSelect }) {
           );
         })}
       </View>
+      {selectedTip.type === 'custom' && (
+        <TextInput
+          style={styles.customTipInput}
+          placeholder="Tip amount ($)"
+          placeholderTextColor={colors.outlineVariant}
+          keyboardType="decimal-pad"
+          value={customAmount}
+          onChangeText={onCustomChange}
+        />
+      )}
     </View>
   );
 }
@@ -129,7 +134,18 @@ function BreakdownRow({ label, value }) {
   );
 }
 
-function ProgressiveReceipt({ selectedTip, onSelectTip, tipAmount, total }) {
+function ProgressiveReceipt({
+  lineItems,
+  payBase,
+  selectedTip,
+  onSelectTip,
+  customTipStr,
+  onCustomTipChange,
+  tipAmount,
+  serviceFee,
+  tax,
+  total,
+}) {
   const tipLabel =
     selectedTip.type === 'custom'
       ? 'Custom'
@@ -137,177 +153,313 @@ function ProgressiveReceipt({ selectedTip, onSelectTip, tipAmount, total }) {
 
   return (
     <View style={[styles.receiptCard, shadows.card]}>
-      {LINE_ITEMS.map((item, i) => (
-        <ReceiptLineItem key={i} item={item} />
-      ))}
+      {lineItems.length === 0 ? (
+        <Text style={styles.emptyLines}>No line items for your share.</Text>
+      ) : (
+        lineItems.map((row, i) => <ReceiptLineItem key={row.key} name={row.name} amount={row.amount} />)
+      )}
 
       <TonalDivider />
 
-      <TipSelector selectedTip={selectedTip} onSelect={onSelectTip} />
+      <TipSelector
+        selectedTip={selectedTip}
+        onSelect={onSelectTip}
+        customAmount={customTipStr}
+        onCustomChange={onCustomTipChange}
+      />
 
       <TonalDivider />
 
       <View style={styles.breakdownSection}>
-        <BreakdownRow label="Subtotal" value={`$${SUBTOTAL.toFixed(2)}`} />
-        <BreakdownRow label="Service Fee (3%)" value={`$${SERVICE_FEE.toFixed(2)}`} />
-        <BreakdownRow label="Tax (10%)" value={`$${TAX.toFixed(2)}`} />
-        <BreakdownRow label={`Tip (${tipLabel})`} value={`$${tipAmount.toFixed(2)}`} />
+        <BreakdownRow label="Subtotal (your share)" value={formatMoney(payBase)} />
+        <BreakdownRow label="Service Fee (3%)" value={formatMoney(serviceFee)} />
+        <BreakdownRow label="Tax (10%)" value={formatMoney(tax)} />
+        <BreakdownRow label={`Tip (${tipLabel})`} value={formatMoney(tipAmount)} />
       </View>
 
       <DashedDivider />
 
       <View style={styles.totalRow}>
         <Text style={styles.totalLabel}>Total to Pay</Text>
-        <Text style={styles.totalAmount}>${total.toFixed(2)}</Text>
+        <Text style={styles.totalAmount}>{formatMoney(total)}</Text>
       </View>
     </View>
   );
 }
 
-function PaymentButtons() {
-  return (
-    <View style={styles.paymentButtons}>
-      <TouchableOpacity activeOpacity={0.85} style={styles.applePayButton}>
-        <Text style={styles.applePayIcon}>{'\uF8FF'}</Text>
-        <Text style={styles.applePayText}>Pay with Apple Pay</Text>
-      </TouchableOpacity>
-      <TouchableOpacity activeOpacity={0.85} style={styles.cardPayButton}>
-        <Text style={styles.cardPayText}>Pay with Credit/Debit Card</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-function EditorialDetails() {
+function ParticipantStrip({ members }) {
+  const shown = (members || []).slice(0, 4);
+  const extra = Math.max(0, (members || []).length - 4);
   return (
     <View style={styles.detailsGrid}>
-      <View style={styles.detailCard}>
-        <MaterialIcons
-          name="group"
-          size={22}
-          color={colors.secondary}
-          style={styles.detailIcon}
-        />
+      <View style={[styles.detailCard, { flex: 1 }]}>
+        <MaterialIcons name="group" size={22} color={colors.secondary} style={styles.detailIcon} />
         <Text style={styles.detailLabel}>PARTICIPANTS</Text>
-        <View style={styles.participantAvatars}>
-          {PARTICIPANT_AVATARS.map((url, i) => (
-            <Image
-              key={i}
-              source={{ uri: url }}
-              style={[styles.participantAvatar, i > 0 && { marginLeft: -8 }]}
-            />
+        <View style={styles.participantRow}>
+          {shown.map((m, i) => (
+            <View key={m.id} style={[styles.participantChip, i > 0 && { marginLeft: -6 }]}>
+              <Text style={styles.participantChipText} numberOfLines={1}>
+                {m.nickname?.charAt(0) || '?'}
+              </Text>
+            </View>
           ))}
-          <View style={[styles.participantOverflow, { marginLeft: -8 }]}>
-            <Text style={styles.participantOverflowText}>+2</Text>
-          </View>
+          {extra > 0 && (
+            <View style={[styles.participantOverflow, { marginLeft: -6 }]}>
+              <Text style={styles.participantOverflowText}>+{extra}</Text>
+            </View>
+          )}
         </View>
       </View>
-      <View style={styles.detailCard}>
-        <MaterialIcons
-          name="security"
-          size={22}
-          color={colors.secondary}
-          style={styles.detailIcon}
-        />
+      <View style={[styles.detailCard, { flex: 1 }]}>
+        <MaterialIcons name="security" size={22} color={colors.secondary} style={styles.detailIcon} />
         <Text style={styles.detailLabel}>SECURITY</Text>
-        <Text style={styles.detailValue}>End-to-end encrypted payment</Text>
+        <Text style={styles.detailValue}>Payments processed securely via Stripe</Text>
       </View>
     </View>
   );
 }
 
-function BottomNavBar({ insets }) {
-  const NAV = [
-    { key: 'activity', label: 'Activity', icon: 'receipt-long', active: false },
-    { key: 'split', label: 'Split', icon: 'group-add', active: true },
-    { key: 'scan', label: 'Scan', icon: 'qr-code-scanner', active: false },
-    { key: 'wallet', label: 'Wallet', icon: 'account-balance-wallet', active: false },
-  ];
-
-  return (
-    <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-      {NAV.map((item) => (
-        <TouchableOpacity
-          key={item.key}
-          style={[styles.navItem, item.active && styles.navItemActive]}
-          activeOpacity={0.7}
-        >
-          <MaterialIcons
-            name={item.icon}
-            size={24}
-            color={item.active ? colors.secondary : colors.outlineVariant}
-          />
-          <Text style={[styles.navLabel, item.active && styles.navLabelActive]}>
-            {item.label}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
+function isMockPayment(payment) {
+  const id = payment?.stripe_payment_intent_id || '';
+  return id.startsWith('pi_mock');
 }
 
-export default function ReviewPaymentScreen({ navigation }) {
+export default function ReviewPaymentScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const [selectedTip, setSelectedTip] = useState({ type: 'percent', value: 0.20 });
+  const { user } = useAuth();
+  const billId = route?.params?.billId;
 
-  const tipAmount = parseFloat(
+  const [loading, setLoading] = useState(true);
+  const [bill, setBill] = useState(null);
+  const [members, setMembers] = useState([]);
+  const [lineItems, setLineItems] = useState([]);
+  const [payBase, setPayBase] = useState(0);
+  const [myMember, setMyMember] = useState(null);
+  const [paying, setPaying] = useState(false);
+
+  const [selectedTip, setSelectedTip] = useState({ type: 'percent', value: 0.2 });
+  const [customTipStr, setCustomTipStr] = useState('3.00');
+
+  const load = useCallback(async () => {
+    if (!billId || !user?.id) return;
+    setLoading(true);
+    try {
+      const [sumRes, assignRes, payRes] = await Promise.all([
+        billsApi.getSummary(billId),
+        assignmentsApi.list(billId),
+        paymentsApi.listForBill(billId),
+      ]);
+
+      const data = sumRes.data;
+      const b = data.bill;
+      const mems = data.members ?? [];
+      setBill(b);
+      setMembers(mems);
+
+      const uid = String(user.id);
+      const me = mems.find((m) => m.user_id != null && String(m.user_id) === uid);
+      setMyMember(me || null);
+
+      const assignments = assignRes.data ?? [];
+      const payments = payRes.data ?? [];
+
+      if (!me) {
+        setLineItems([]);
+        setPayBase(0);
+        setLoading(false);
+        return;
+      }
+
+      const mine = assignments.filter((a) => String(a.bill_member_id) === String(me.id));
+      const rows = mine.map((a, idx) => ({
+        key: `${a.id}-${idx}`,
+        name: a.item_name || 'Item',
+        amount: parseFloat(a.amount_owed ?? 0),
+      }));
+      setLineItems(rows);
+
+      const owed = rows.reduce((s, r) => s + r.amount, 0);
+      const paid = payments
+        .filter((p) => String(p.bill_member_id) === String(me.id) && p.status === 'succeeded')
+        .reduce((s, p) => s + parseFloat(p.amount ?? 0), 0);
+      setPayBase(Math.max(0, owed - paid));
+    } catch {
+      setBill(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [billId, user?.id]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const tipAmount =
     selectedTip.type === 'custom'
-      ? selectedTip.amount.toFixed(2)
-      : (SUBTOTAL * selectedTip.value).toFixed(2),
-  );
-  const total = SUBTOTAL + SERVICE_FEE + TAX + tipAmount;
+      ? Math.max(0, parseFloat(customTipStr) || 0)
+      : payBase * selectedTip.value;
+
+  const serviceFee = payBase * SERVICE_FEE_RATE;
+  const tax = payBase * TAX_RATE;
+  const total = payBase + serviceFee + tax + tipAmount;
 
   const handleSelectTip = useCallback((option) => {
     if (option.value === 'custom') {
-      Alert.prompt(
-        'Custom Tip',
-        'Enter tip amount ($):',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'OK',
-            onPress: (val) => {
-              const parsed = parseFloat(val) || 0;
-              setSelectedTip({ type: 'custom', value: 'custom', amount: parsed });
-            },
-          },
-        ],
-        'plain-text',
-        '3.00',
-        'decimal-pad',
-      );
+      setSelectedTip({ type: 'custom', value: 'custom' });
     } else {
       setSelectedTip({ type: 'percent', value: option.value });
     }
   }, []);
 
+  const runPayment = async () => {
+    if (!billId || !myMember || payBase <= 0) {
+      Alert.alert('Nothing to pay', 'You have no remaining balance on this bill.');
+      return;
+    }
+    if (total <= 0) {
+      Alert.alert('Invalid total', 'Amount must be greater than zero.');
+      return;
+    }
+
+    setPaying(true);
+    try {
+      const createRes = await paymentsApi.createIntent({
+        billId,
+        memberId: myMember.id,
+        amount: total.toFixed(2),
+        currency: bill?.currency || 'USD',
+      });
+      const payment = createRes.data;
+
+      const finish = async () => {
+        await paymentsApi.confirm(payment.id);
+        navigation.replace('FundsCollected', {
+          amount: total,
+          merchantName: bill?.merchant_name || bill?.title,
+          billTitle: bill?.title,
+          billId,
+        });
+      };
+
+      if (isMockPayment(payment)) {
+        Alert.alert(
+          'Complete payment',
+          `Charge ${formatMoney(total)}? (Stripe is not configured — this records a test payment.)`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Pay',
+              onPress: () =>
+                finish().catch((e) => Alert.alert('Error', e?.error?.message ?? 'Failed to confirm')),
+            },
+          ],
+        );
+      } else {
+        Alert.alert(
+          'Payment intent created',
+          'Use Stripe PaymentSheet with the client secret from this response. In __DEV__ you can still confirm without charging a card.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            ...(typeof __DEV__ !== 'undefined' && __DEV__
+              ? [
+                  {
+                    text: 'Confirm (dev)',
+                    onPress: () =>
+                      finish().catch((e) => Alert.alert('Error', e?.error?.message ?? 'Failed')),
+                  },
+                ]
+              : []),
+          ],
+        );
+      }
+    } catch (err) {
+      Alert.alert('Payment failed', err?.error?.message ?? 'Could not start payment');
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={[styles.root, styles.centered]}>
+        <ActivityIndicator size="large" color={colors.secondary} />
+      </View>
+    );
+  }
+
+  if (!bill || !myMember) {
+    return (
+      <View style={[styles.root, styles.centered]}>
+        <Text style={styles.errorText}>
+          {!bill ? 'Bill not found.' : "You're not on this bill as a member."}
+        </Text>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={{ marginTop: 16 }}>
+          <Text style={styles.linkText}>Go back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.root}>
-      <TopBar
-        insets={insets}
-        onBack={navigation?.canGoBack?.() ? navigation.goBack : null}
-      />
+      <TopBar insets={insets} onBack={() => navigation.goBack()} />
 
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: insets.top + 64, paddingBottom: insets.bottom + 100 },
+          { paddingTop: insets.top + 64, paddingBottom: insets.bottom + 40 },
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <MerchantHero />
+        <MerchantHero bill={bill} memberNickname={myMember.nickname} />
         <ProgressiveReceipt
+          lineItems={lineItems}
+          payBase={payBase}
           selectedTip={selectedTip}
           onSelectTip={handleSelectTip}
+          customTipStr={customTipStr}
+          onCustomTipChange={setCustomTipStr}
           tipAmount={tipAmount}
+          serviceFee={serviceFee}
+          tax={tax}
           total={total}
         />
-        <PaymentButtons />
-        <EditorialDetails />
-      </ScrollView>
 
-      <BottomNavBar insets={insets} />
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={runPayment}
+          disabled={paying || payBase <= 0}
+          style={payBase <= 0 ? { opacity: 0.5 } : null}
+        >
+          <LinearGradient
+            colors={[colors.secondary, colors.secondaryDim]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.payPrimary, shadows.settleButton]}
+          >
+            {paying ? (
+              <ActivityIndicator color={colors.onSecondary} />
+            ) : (
+              <>
+                <MaterialIcons name="lock" size={20} color={colors.onSecondary} />
+                <Text style={styles.payPrimaryText}>
+                  {payBase <= 0 ? 'Nothing owed' : `Pay ${formatMoney(total)}`}
+                </Text>
+              </>
+            )}
+          </LinearGradient>
+        </TouchableOpacity>
+
+        <Text style={styles.payHint}>
+          {payBase > 0
+            ? 'Uses your saved payment flow. Without Stripe keys, payments are recorded as test transactions.'
+            : 'Your share is fully paid or has no assigned items.'}
+
+        </Text>
+
+        <ParticipantStrip members={members} />
+      </ScrollView>
     </View>
   );
 }
@@ -317,8 +469,23 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  centered: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  errorText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 16,
+    color: colors.onSurfaceVariant,
+    textAlign: 'center',
+  },
+  linkText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    color: colors.secondary,
+  },
 
-  // Top Bar
   topBar: {
     position: 'absolute',
     top: 0,
@@ -329,7 +496,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    height: 56,
+    minHeight: 56,
     backgroundColor: 'rgba(248, 249, 250, 0.7)',
     ...Platform.select({
       ios: {},
@@ -337,8 +504,10 @@ const styles = StyleSheet.create({
     }),
   },
   topBarBtn: {
-    padding: 8,
-    borderRadius: radii.full,
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   topBarTitle: {
     fontFamily: 'Manrope_700Bold',
@@ -348,15 +517,9 @@ const styles = StyleSheet.create({
     color: colors.onSurface,
   },
 
-  // Scroll
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 24,
-  },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 24 },
 
-  // Hero
   heroSection: {
     alignItems: 'center',
     marginBottom: 32,
@@ -385,19 +548,24 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: colors.onSurfaceVariant,
     textAlign: 'center',
-    maxWidth: 260,
+    maxWidth: 280,
     lineHeight: 22,
   },
 
-  // Receipt Card
   receiptCard: {
     backgroundColor: colors.surfaceContainerLowest,
     borderRadius: radii.xl,
     padding: 28,
-    marginBottom: 28,
+    marginBottom: 20,
+  },
+  emptyLines: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: colors.onSurfaceVariant,
+    textAlign: 'center',
+    paddingVertical: 8,
   },
 
-  // Line Items
   lineItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -427,7 +595,6 @@ const styles = StyleSheet.create({
     color: colors.onSurface,
   },
 
-  // Dividers
   tonalDivider: {
     height: 1,
     backgroundColor: colors.surfaceContainerLow,
@@ -440,7 +607,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
 
-  // Tip Section
   tipSection: {
     gap: 14,
   },
@@ -453,10 +619,12 @@ const styles = StyleSheet.create({
   },
   tipRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
   tipChip: {
-    flex: 1,
+    flexGrow: 1,
+    minWidth: '18%',
     paddingVertical: 10,
     borderRadius: radii.sm,
     borderWidth: 1,
@@ -470,7 +638,7 @@ const styles = StyleSheet.create({
   },
   tipChipText: {
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: colors.onSurfaceVariant,
   },
@@ -482,8 +650,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.5,
   },
+  customTipInput: {
+    marginTop: 4,
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: radii.md,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontFamily: 'Inter_400Regular',
+    fontSize: 16,
+    color: colors.onSurface,
+  },
 
-  // Breakdown
   breakdownSection: {
     gap: 12,
   },
@@ -504,7 +681,6 @@ const styles = StyleSheet.create({
     color: colors.onSurface,
   },
 
-  // Total
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -524,52 +700,36 @@ const styles = StyleSheet.create({
     color: colors.secondary,
   },
 
-  // Payment Buttons
-  paymentButtons: {
-    gap: 14,
-    marginBottom: 40,
-  },
-  applePayButton: {
-    backgroundColor: colors.onSurface,
-    height: 60,
-    borderRadius: radii.full,
+  payPrimary: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
+    height: 56,
+    borderRadius: radii.full,
+    marginBottom: 12,
   },
-  applePayIcon: {
-    fontSize: 22,
-    color: colors.surfaceContainerLowest,
-  },
-  applePayText: {
+  payPrimaryText: {
     fontFamily: 'Manrope_700Bold',
     fontSize: 17,
     fontWeight: '700',
-    color: colors.surfaceContainerLowest,
+    color: colors.onSecondary,
   },
-  cardPayButton: {
-    backgroundColor: colors.surfaceContainerHigh,
-    height: 60,
-    borderRadius: radii.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardPayText: {
-    fontFamily: 'Manrope_700Bold',
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.onSurface,
+  payHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: colors.outlineVariant,
+    textAlign: 'center',
+    marginBottom: 28,
+    lineHeight: 18,
   },
 
-  // Editorial Details
   detailsGrid: {
     flexDirection: 'row',
     gap: 14,
-    marginBottom: 32,
+    marginBottom: 24,
   },
   detailCard: {
-    flex: 1,
     backgroundColor: colors.surfaceContainerLow,
     borderRadius: radii.xl,
     padding: 20,
@@ -592,18 +752,24 @@ const styles = StyleSheet.create({
     color: colors.onSurface,
     lineHeight: 17,
   },
-
-  // Participant Avatars
-  participantAvatars: {
+  participantRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  participantAvatar: {
+  participantChip: {
     width: 32,
     height: 32,
     borderRadius: 16,
+    backgroundColor: colors.secondaryContainer,
+    alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 2,
     borderColor: colors.surfaceContainerLow,
+  },
+  participantChipText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 12,
+    color: colors.secondary,
   },
   participantOverflow: {
     width: 32,
@@ -620,50 +786,5 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: colors.onSurfaceVariant,
-  },
-
-  // Bottom Nav
-  bottomNav: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    zIndex: 50,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingTop: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.85)',
-    ...Platform.select({
-      ios: {},
-      android: { backgroundColor: 'rgba(255, 255, 255, 0.95)' },
-    }),
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    ...shadows.ambient,
-  },
-  navItem: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 16,
-  },
-  navItemActive: {
-    backgroundColor: 'rgba(0, 108, 92, 0.06)',
-  },
-  navLabel: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 11,
-    fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: 4,
-    color: colors.outlineVariant,
-  },
-  navLabelActive: {
-    color: colors.secondary,
-    fontFamily: 'Inter_600SemiBold',
-    fontWeight: '600',
   },
 });

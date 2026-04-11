@@ -16,14 +16,92 @@ import {
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import DashboardScreen from './src/screens/DashboardScreen';
+
+import { AuthProvider, useAuth } from './src/contexts/AuthContext';
+
+import LoginScreen from './src/screens/LoginScreen';
+import SignupScreen from './src/screens/SignupScreen';
 import BillSplitScreen from './src/screens/BillSplitScreen';
 import ReviewPaymentScreen from './src/screens/ReviewPaymentScreen';
 import ActivityDetailScreen from './src/screens/ActivityDetailScreen';
 import ScanReceiptScreen from './src/screens/ScanReceiptScreen';
+import CreateBillScreen from './src/screens/CreateBillScreen';
 import FundsCollectedScreen from './src/screens/FundsCollectedScreen';
+import NotificationsScreen from './src/screens/NotificationsScreen';
+import MainTabNavigator from './src/navigation/MainTabNavigator';
 
-const Stack = createNativeStackNavigator();
+const AuthStack = createNativeStackNavigator();
+const MainStack = createNativeStackNavigator();
+
+function AuthNavigator() {
+  return (
+    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+      <AuthStack.Screen name="Login" component={LoginScreen} />
+      <AuthStack.Screen
+        name="Signup"
+        component={SignupScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+    </AuthStack.Navigator>
+  );
+}
+
+function MainNavigator() {
+  return (
+    <MainStack.Navigator screenOptions={{ headerShown: false }}>
+      <MainStack.Screen name="MainTabs" component={MainTabNavigator} />
+      <MainStack.Screen
+        name="BillSplit"
+        component={BillSplitScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <MainStack.Screen
+        name="ReviewPayment"
+        component={ReviewPaymentScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <MainStack.Screen
+        name="ActivityDetail"
+        component={ActivityDetailScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <MainStack.Screen
+        name="CreateBill"
+        component={CreateBillScreen}
+        options={{ animation: 'slide_from_bottom' }}
+      />
+      <MainStack.Screen
+        name="ScanReceipt"
+        component={ScanReceiptScreen}
+        options={{ animation: 'slide_from_bottom' }}
+      />
+      <MainStack.Screen
+        name="FundsCollected"
+        component={FundsCollectedScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <MainStack.Screen
+        name="Notifications"
+        component={NotificationsScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+    </MainStack.Navigator>
+  );
+}
+
+function RootNavigator() {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator size="large" color="#006c5c" />
+      </View>
+    );
+  }
+
+  return user ? <MainNavigator /> : <AuthNavigator />;
+}
 
 export default function App() {
   const [fontsLoaded] = useFonts({
@@ -46,37 +124,12 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
-        <StatusBar style="dark" />
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="Dashboard" component={DashboardScreen} />
-          <Stack.Screen
-            name="BillSplit"
-            component={BillSplitScreen}
-            options={{ animation: 'slide_from_right' }}
-          />
-          <Stack.Screen
-            name="ReviewPayment"
-            component={ReviewPaymentScreen}
-            options={{ animation: 'slide_from_right' }}
-          />
-          <Stack.Screen
-            name="ActivityDetail"
-            component={ActivityDetailScreen}
-            options={{ animation: 'slide_from_right' }}
-          />
-          <Stack.Screen
-            name="ScanReceipt"
-            component={ScanReceiptScreen}
-            options={{ animation: 'slide_from_bottom' }}
-          />
-          <Stack.Screen
-            name="FundsCollected"
-            component={FundsCollectedScreen}
-            options={{ animation: 'slide_from_right' }}
-          />
-        </Stack.Navigator>
-      </NavigationContainer>
+      <AuthProvider>
+        <NavigationContainer>
+          <StatusBar style="dark" />
+          <RootNavigator />
+        </NavigationContainer>
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }

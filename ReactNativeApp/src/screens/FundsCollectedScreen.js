@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   View,
   Text,
@@ -11,29 +11,35 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CommonActions } from '@react-navigation/native';
 import { colors, radii, shadows } from '../theme';
+import { useAuth } from '../contexts/AuthContext';
 
-const PROFILE_URL =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuCpEGA88z5uer18i94FNkQJTv3AWis6jdpiDPLFqbqPPahQqWHiTtkRs230gE97pXs6aQhaa2D2OdA0R7nOmeYtp_ffeos_Dbj6HATgnbuwXEArBVZN5HQf4BNi4pEQNC2bZYOqntr5kkmCopwPBlTtnviIHG-X3NBEDoVXJce5_ZDvurlOV9cjLY1lvt24CCUgrSaJLAGvHfZ2HQ0VYQDcS6DiosipkspuiVC3p91bSaXhbfucdqxphnbWiDNp-RNGYrZmou0n';
+function formatMoney(n) {
+  const x = typeof n === 'string' ? parseFloat(n) : Number(n);
+  if (Number.isNaN(x)) return '$0.00';
+  return `$${x.toFixed(2)}`;
+}
 
-function TopAppBar({ insets, onBack }) {
+function TopAppBar({ insets, user }) {
+  const initials = (user?.full_name || '?')
+    .split(' ')
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
   return (
     <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
       <View style={styles.topBarInner}>
-        <View style={styles.headerLeft}>
-          {onBack && (
-            <TouchableOpacity onPress={onBack} activeOpacity={0.7} style={styles.backBtn}>
-              <MaterialIcons name="arrow-back" size={24} color={colors.onSurfaceVariant} />
-            </TouchableOpacity>
-          )}
-          <Text style={styles.appTitle}>WealthSplit</Text>
-        </View>
+        <Text style={styles.appTitle}>SPLTR</Text>
         <View style={styles.headerRight}>
-          <TouchableOpacity activeOpacity={0.7} style={styles.iconBtn}>
-            <MaterialIcons name="notifications-none" size={24} color={colors.onSurface} />
-          </TouchableOpacity>
           <View style={styles.avatarWrap}>
-            <Image source={{ uri: PROFILE_URL }} style={styles.avatarImg} />
+            {user?.avatar_url ? (
+              <Image source={{ uri: user.avatar_url }} style={styles.avatarImg} />
+            ) : (
+              <Text style={styles.avatarInitials}>{initials}</Text>
+            )}
           </View>
         </View>
       </View>
@@ -41,55 +47,35 @@ function TopAppBar({ insets, onBack }) {
   );
 }
 
-function SuccessHeader() {
+function SuccessHeader({ amount, merchantName }) {
   return (
     <View style={styles.successHeader}>
       <View style={styles.successIcon}>
         <MaterialIcons name="check-circle" size={32} color={colors.secondaryDim} />
       </View>
-      <Text style={styles.successTitle}>Funds Collected</Text>
+      <Text style={styles.successTitle}>Payment recorded</Text>
       <Text style={styles.successDesc}>
-        Your settlement for Brew District Caf\u00e9 is ready.
+        {formatMoney(amount)} for {merchantName || 'your bill'} was processed successfully.
       </Text>
     </View>
   );
 }
 
-function VirtualCard() {
+function AmountCard({ amount, billTitle }) {
   return (
     <View style={styles.cardWrapper}>
       <LinearGradient
         colors={[colors.secondary, colors.secondaryDim]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={styles.virtualCard}
+        style={styles.amountCard}
       >
-        <View style={styles.cardTop}>
-          <View>
-            <Text style={styles.cardLabel}>TOTAL SETTLEMENT</Text>
-            <Text style={styles.cardAmount}>$54.50</Text>
-          </View>
-          <MaterialIcons name="contactless" size={36} color="rgba(227, 255, 246, 0.85)" />
-        </View>
-
-        <View style={styles.cardBottom}>
-          <Text style={styles.cardNumber}>4532  8810  9924  0051</Text>
-          <View style={styles.cardDetails}>
-            <View style={styles.cardDetailGroup}>
-              <View style={styles.cardDetailCol}>
-                <Text style={styles.cardDetailLabel}>EXPIRY</Text>
-                <Text style={styles.cardDetailValue}>08/26</Text>
-              </View>
-              <View style={styles.cardDetailCol}>
-                <Text style={styles.cardDetailLabel}>CVC</Text>
-                <Text style={styles.cardDetailValue}>***</Text>
-              </View>
-            </View>
-            <View style={styles.cardDetailColRight}>
-              <Text style={styles.cardDetailLabel}>MERCHANT</Text>
-              <Text style={styles.cardDetailValue}>Brew District Caf\u00e9</Text>
-            </View>
-          </View>
+        <Text style={styles.cardLabel}>AMOUNT PAID</Text>
+        <Text style={styles.cardAmount}>{formatMoney(amount)}</Text>
+        {billTitle ? <Text style={styles.cardBillTitle}>{billTitle}</Text> : null}
+        <View style={styles.cardFooter}>
+          <MaterialIcons name="verified-user" size={20} color="rgba(227, 255, 246, 0.75)" />
+          <Text style={styles.cardFooterText}>Secured with Stripe</Text>
         </View>
       </LinearGradient>
     </View>
@@ -101,116 +87,68 @@ function InfoCard() {
     <View style={styles.infoCard}>
       <View style={styles.infoHeader}>
         <MaterialIcons name="info" size={22} color={colors.secondary} />
-        <Text style={styles.infoTitle}>One-time use only</Text>
+        <Text style={styles.infoTitle}>What happens next</Text>
       </View>
       <Text style={styles.infoDesc}>
-        This virtual card will be deactivated immediately after the transaction is
-        processed. Please ensure the amount matches your checkout total.
+        Your payment is saved on this bill. Other members can pay their shares from their
+        accounts. You can return to the dashboard to see updated balances.
       </Text>
-      <View style={styles.poweredRow}>
-        <Text style={styles.poweredText}>POWERED BY STRIPE ISSUING</Text>
-      </View>
     </View>
   );
 }
 
-function ActionButtons() {
-  return (
-    <View style={styles.actionGrid}>
-      <TouchableOpacity activeOpacity={0.85} style={styles.payNowBtn}>
-        <LinearGradient
-          colors={[colors.secondary, colors.secondaryDim]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.payNowGradient}
-        >
-          <MaterialIcons name="payment" size={22} color={colors.onSecondary} />
-          <Text style={styles.payNowText}>Pay Now</Text>
-        </LinearGradient>
-      </TouchableOpacity>
-      <View style={styles.actionRow}>
-        <TouchableOpacity activeOpacity={0.8} style={styles.secondaryBtn}>
-          <MaterialIcons name="content-copy" size={20} color={colors.onSurface} />
-          <Text style={styles.secondaryBtnText}>Copy Details</Text>
-        </TouchableOpacity>
-        <TouchableOpacity activeOpacity={0.8} style={styles.secondaryBtn}>
-          <MaterialIcons name="visibility" size={20} color={colors.onSurface} />
-          <Text style={styles.secondaryBtnText}>Show CVC</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
-function HelpSection() {
-  return (
-    <View style={styles.helpSection}>
-      <TouchableOpacity activeOpacity={0.7} style={styles.helpRow}>
-        <View style={styles.helpLeft}>
-          <MaterialIcons name="help-outline" size={22} color={colors.secondary} />
-          <Text style={styles.helpText}>Having trouble paying?</Text>
-        </View>
-        <MaterialIcons name="chevron-right" size={24} color={colors.outline} />
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-function BottomNavBar({ insets }) {
-  const NAV = [
-    { key: 'dashboard', label: 'Dashboard', icon: 'dashboard', active: false },
-    { key: 'activity', label: 'Activity', icon: 'receipt-long', active: true },
-    { key: 'profile', label: 'Profile', icon: 'person', active: false },
-  ];
-
-  return (
-    <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-      {NAV.map((item) => (
-        <TouchableOpacity
-          key={item.key}
-          style={[styles.navItem, item.active && styles.navItemActive]}
-          activeOpacity={0.7}
-        >
-          <MaterialIcons
-            name={item.icon}
-            size={24}
-            color={item.active ? colors.secondary : colors.outlineVariant}
-          />
-          <Text style={[styles.navLabel, item.active && styles.navLabelActive]}>
-            {item.label}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-}
-
-export default function FundsCollectedScreen({ navigation }) {
+export default function FundsCollectedScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const amount = route?.params?.amount ?? 0;
+  const merchantName = route?.params?.merchantName;
+  const billTitle = route?.params?.billTitle;
+
+  const goDashboard = () => {
+    navigation.dispatch(
+      CommonActions.reset({
+        index: 0,
+        routes: [
+          {
+            name: 'MainTabs',
+            state: {
+              routes: [{ name: 'DashboardTab' }],
+              index: 0,
+            },
+          },
+        ],
+      }),
+    );
+  };
 
   return (
     <View style={styles.root}>
-      <TopAppBar
-        insets={insets}
-        onBack={navigation?.canGoBack?.() ? navigation.goBack : null}
-      />
+      <TopAppBar insets={insets} user={user} />
 
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: insets.top + 72, paddingBottom: insets.bottom + 100 },
+          { paddingTop: insets.top + 72, paddingBottom: insets.bottom + 120 },
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <SuccessHeader />
-        <VirtualCard />
+        <SuccessHeader amount={amount} merchantName={merchantName} />
+        <AmountCard amount={amount} billTitle={billTitle} />
         <InfoCard />
-        <ActionButtons />
-        <HelpSection />
-      </ScrollView>
 
-      <BottomNavBar insets={insets} />
+        <TouchableOpacity activeOpacity={0.85} onPress={goDashboard} style={styles.primaryBtn}>
+          <LinearGradient
+            colors={[colors.secondary, colors.secondaryDim]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.primaryGradient}
+          >
+            <MaterialIcons name="dashboard" size={22} color={colors.onSecondary} />
+            <Text style={styles.primaryText}>Back to Dashboard</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      </ScrollView>
     </View>
   );
 }
@@ -221,7 +159,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
 
-  // Top Bar
   topBar: {
     position: 'absolute',
     top: 0,
@@ -241,19 +178,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 12,
   },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  backBtn: {
-    padding: 4,
-  },
   appTitle: {
     fontFamily: 'Manrope_800ExtraBold',
     fontSize: 20,
@@ -261,30 +185,34 @@ const styles = StyleSheet.create({
     letterSpacing: -0.8,
     color: colors.onSurface,
   },
-  iconBtn: {
-    padding: 4,
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   avatarWrap: {
     width: 32,
     height: 32,
     borderRadius: 16,
+    backgroundColor: colors.secondaryContainer,
+    alignItems: 'center',
+    justifyContent: 'center',
     overflow: 'hidden',
-    backgroundColor: colors.surfaceContainerHighest,
   },
   avatarImg: {
     width: 32,
     height: 32,
   },
-
-  // Scroll
-  scroll: {
-    flex: 1,
+  avatarInitials: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 11,
+    color: colors.secondary,
   },
+
+  scroll: { flex: 1 },
   scrollContent: {
     paddingHorizontal: 24,
   },
 
-  // Success Header
   successHeader: {
     alignItems: 'center',
     marginBottom: 32,
@@ -313,19 +241,16 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: colors.onSurfaceVariant,
     textAlign: 'center',
-    maxWidth: 280,
+    maxWidth: 300,
     lineHeight: 22,
   },
 
-  // Virtual Card
   cardWrapper: {
-    marginBottom: 28,
+    marginBottom: 24,
   },
-  virtualCard: {
+  amountCard: {
     borderRadius: radii.xl,
     padding: 28,
-    aspectRatio: 1.586,
-    justifyContent: 'space-between',
     ...Platform.select({
       ios: {
         shadowColor: colors.secondary,
@@ -336,11 +261,6 @@ const styles = StyleSheet.create({
       android: { elevation: 10 },
     }),
   },
-  cardTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
   cardLabel: {
     fontFamily: 'Inter_700Bold',
     fontSize: 11,
@@ -348,59 +268,38 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     color: 'rgba(227, 255, 246, 0.65)',
     textTransform: 'uppercase',
-    marginBottom: 6,
+    marginBottom: 8,
   },
   cardAmount: {
     fontFamily: 'Manrope_800ExtraBold',
-    fontSize: 36,
+    fontSize: 40,
     fontWeight: '800',
     letterSpacing: -1,
     color: colors.onSecondary,
+    marginBottom: 8,
   },
-  cardBottom: {},
-  cardNumber: {
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    fontSize: 17,
-    fontWeight: '500',
-    letterSpacing: 3,
-    color: colors.onSecondary,
+  cardBillTitle: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 15,
+    color: 'rgba(227, 255, 246, 0.9)',
     marginBottom: 20,
   },
-  cardDetails: {
+  cardFooter: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
+    alignItems: 'center',
+    gap: 8,
   },
-  cardDetailGroup: {
-    flexDirection: 'row',
-    gap: 28,
-  },
-  cardDetailCol: {},
-  cardDetailColRight: {
-    alignItems: 'flex-end',
-  },
-  cardDetailLabel: {
+  cardFooterText: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 9,
-    fontWeight: '500',
-    letterSpacing: 2,
-    color: 'rgba(227, 255, 246, 0.55)',
-    textTransform: 'uppercase',
-    marginBottom: 3,
-  },
-  cardDetailValue: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.onSecondary,
+    fontSize: 13,
+    color: 'rgba(227, 255, 246, 0.75)',
   },
 
-  // Info Card
   infoCard: {
     backgroundColor: colors.surfaceContainerLow,
     borderRadius: radii.xl,
     padding: 24,
-    marginBottom: 24,
+    marginBottom: 28,
   },
   infoHeader: {
     flexDirection: 'row',
@@ -419,31 +318,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.onSurfaceVariant,
     lineHeight: 21,
-    marginBottom: 16,
-  },
-  poweredRow: {
-    paddingTop: 12,
-  },
-  poweredText: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 2,
-    color: colors.outline,
-    textTransform: 'uppercase',
   },
 
-  // Action Buttons
-  actionGrid: {
-    gap: 14,
-    marginBottom: 40,
-  },
-  payNowBtn: {
+  primaryBtn: {
     borderRadius: radii.xl,
     overflow: 'hidden',
     ...shadows.settleButton,
   },
-  payNowGradient: {
+  primaryGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -451,100 +333,10 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     borderRadius: radii.xl,
   },
-  payNowText: {
+  primaryText: {
     fontFamily: 'Manrope_700Bold',
     fontSize: 17,
     fontWeight: '700',
     color: colors.onSecondary,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: 14,
-  },
-  secondaryBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: colors.surfaceContainerHigh,
-    paddingVertical: 16,
-    borderRadius: radii.xl,
-  },
-  secondaryBtnText: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.onSurface,
-  },
-
-  // Help Section
-  helpSection: {
-    marginBottom: 16,
-  },
-  helpRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.surfaceContainerLowest,
-    borderRadius: radii.xl,
-    padding: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: colors.secondary,
-    ...shadows.card,
-  },
-  helpLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  helpText: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 15,
-    fontWeight: '500',
-    color: colors.onSurface,
-  },
-
-  // Bottom Nav
-  bottomNav: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    zIndex: 50,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingTop: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.85)',
-    ...Platform.select({
-      ios: {},
-      android: { backgroundColor: 'rgba(255, 255, 255, 0.95)' },
-    }),
-    borderTopLeftRadius: radii.xl,
-    borderTopRightRadius: radii.xl,
-    ...shadows.ambient,
-  },
-  navItem: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    borderRadius: 16,
-  },
-  navItemActive: {
-    backgroundColor: 'rgba(0, 108, 92, 0.08)',
-  },
-  navLabel: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 11,
-    fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 1.5,
-    marginTop: 4,
-    color: colors.outlineVariant,
-  },
-  navLabelActive: {
-    color: colors.secondary,
   },
 });
