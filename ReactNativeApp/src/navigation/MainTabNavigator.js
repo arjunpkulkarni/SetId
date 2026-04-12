@@ -4,7 +4,6 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
 
 import DashboardScreen from '../screens/DashboardScreen';
-import ActivityScreen from '../screens/ActivityScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import { colors } from '../theme';
 
@@ -51,16 +50,6 @@ export default function MainTabNavigator() {
           title: 'Dashboard',
           tabBarIcon: ({ color, size }) => (
             <MaterialIcons name="dashboard" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="ActivityTab"
-        component={ActivityScreen}
-        options={{
-          title: 'Activity',
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="receipt-long" size={size} color={color} />
           ),
         }}
       />
