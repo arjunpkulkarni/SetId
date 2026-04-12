@@ -8,22 +8,42 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  TextInput,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, shadows } from '../theme';
-import { bills as billsApi, assignments as assignmentsApi } from '../services/api';
+import { bills as billsApi, assignments as assignmentsApi, receipts as receiptsApi } from '../services/api';
 
 function formatCurrency(value) {
   const num = typeof value === 'string' ? parseFloat(value) : (value ?? 0);
   return `$${Math.abs(num).toFixed(2)}`;
 }
 
+function parsePriceValue(value) {
+  const num = typeof value === 'string' ? parseFloat(value) : (value ?? 0);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function formatPriceInput(value) {
+  const digitsOnly = `${value ?? ''}`.replace(/\D/g, '');
+  if (!digitsOnly) return '0.00';
+  return (parseInt(digitsOnly, 10) / 100).toFixed(2);
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function normalizeItemName(value) {
+  return `${value ?? ''}`.replace(/\s+/g, ' ').trim();
+}
+
+function isDraftItemId(itemId) {
+  return `${itemId}`.startsWith('draft-item-');
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -80,57 +100,151 @@ function MemberChip({ member, active, onPress }) {
   );
 }
 
-function BillItemCard({ item, members, assignedMemberIds, onToggleMember }) {
+function QuantityEditor({ quantity, onDecrement, onIncrement }) {
+  return (
+    <View style={styles.quantityEditor}>
+      <TouchableOpacity
+        onPress={onDecrement}
+        activeOpacity={0.8}
+        style={[styles.quantityAction, quantity === 0 && styles.quantityActionDisabled]}
+      >
+        <MaterialIcons
+          name="remove"
+          size={16}
+          color={quantity === 0 ? colors.outlineVariant : colors.secondary}
+        />
+      </TouchableOpacity>
+      <Text style={styles.quantityValue}>{quantity}</Text>
+      <TouchableOpacity
+        onPress={onIncrement}
+        activeOpacity={0.8}
+        style={styles.quantityAction}
+      >
+        <MaterialIcons name="add" size={16} color={colors.secondary} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function BillItemCard({
+  item,
+  members,
+  assignedMemberIds,
+  onToggleMember,
+  isEditingItems,
+  quantity,
+  name,
+  onNameChange,
+  price,
+  onPriceChange,
+  onDecrementQuantity,
+  onIncrementQuantity,
+  onRemoveItem,
+}) {
   const isUnassigned = assignedMemberIds.length === 0;
+  const isZeroQuantity = isEditingItems && quantity === 0;
+  const totalPrice = parsePriceValue(price ?? item.total_price);
+  const unitPrice = quantity > 0 ? totalPrice / quantity : totalPrice;
 
   return (
-    <View style={[styles.itemCard, isUnassigned ? styles.itemCardUnassigned : styles.itemCardNormal]}>
+    <View
+      style={[
+        styles.itemCard,
+        isUnassigned ? styles.itemCardUnassigned : styles.itemCardNormal,
+        isZeroQuantity && styles.itemCardZeroQuantity,
+      ]}
+    >
       <View style={styles.itemCardHeader}>
         <View style={styles.itemCardInfo}>
-          <Text style={styles.itemName}>{item.name}</Text>
+          {isEditingItems ? (
+            <TextInput
+              value={name}
+              onChangeText={onNameChange}
+              style={styles.itemNameInput}
+              placeholder="Item name"
+              placeholderTextColor={colors.outlineVariant}
+            />
+          ) : (
+            <Text style={styles.itemName}>{name}</Text>
+          )}
           {isUnassigned ? (
             <Text style={styles.itemPriceUnassigned}>
-              Unassigned • {formatCurrency(item.total_price)}
+              Unassigned • {formatCurrency(totalPrice)}
             </Text>
           ) : (
             <Text style={styles.itemPrice}>
-              {item.quantity > 1 ? `${item.quantity} × ${formatCurrency(item.unit_price)} = ` : ''}
-              {formatCurrency(item.total_price)}
+              {quantity > 1 ? `${quantity} × ${formatCurrency(unitPrice)} = ` : ''}
+              {formatCurrency(totalPrice)}
             </Text>
           )}
         </View>
-        {isUnassigned ? (
+        {isEditingItems ? (
+          <QuantityEditor
+            quantity={quantity}
+            onDecrement={onDecrementQuantity}
+            onIncrement={onIncrementQuantity}
+          />
+        ) : isUnassigned ? (
           <View style={styles.unassignedIcon}>
             <MaterialIcons name="priority-high" size={16} color={colors.onErrorContainer} />
           </View>
         ) : (
           <View style={styles.assignedBadge}>
-            <Text style={styles.assignedBadgeText}>{assignedMemberIds.length}</Text>
+            <Text style={styles.assignedBadgeText}>{quantity}</Text>
           </View>
         )}
       </View>
-      <View style={styles.chipRow}>
-        {members.map((m) => (
-          <MemberChip
-            key={m.id}
-            member={m}
-            active={assignedMemberIds.includes(m.id)}
-            onPress={() => onToggleMember(item.id, m.id)}
-          />
-        ))}
+      {isZeroQuantity && (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={onRemoveItem}
+          style={styles.removeItemButton}
+        >
+          <Text style={styles.removeItemButtonText}>Remove Item</Text>
+        </TouchableOpacity>
+      )}
+
+      <View style={[styles.itemCardFooter, isEditingItems && styles.itemCardFooterEditing]}>
+        <View style={styles.chipRow}>
+          {members.map((m) => (
+            <MemberChip
+              key={m.id}
+              member={m}
+              active={assignedMemberIds.includes(m.id)}
+              onPress={() => onToggleMember(item.id, m.id)}
+            />
+          ))}
+        </View>
+
+        {isEditingItems && (
+          <View style={styles.priceEditorWrap}>
+            <Text style={styles.priceEditorLabel}>Price</Text>
+            <View style={styles.priceEditorField}>
+              <Text style={styles.priceEditorCurrency}>$</Text>
+              <TextInput
+                value={price}
+                onChangeText={onPriceChange}
+                keyboardType="decimal-pad"
+                style={styles.priceEditorInput}
+                placeholder="0.00"
+                placeholderTextColor={colors.outlineVariant}
+              />
+            </View>
+          </View>
+        )}
       </View>
     </View>
   );
 }
 
-function MembersSummary({ members, items, assignmentMap }) {
+function MembersSummary({ members, items, assignmentMap, itemPrices }) {
   const memberTotals = members.map((m) => {
     let total = 0;
     let itemCount = 0;
     items.forEach((item) => {
       const assignees = assignmentMap[item.id] || [];
       if (assignees.includes(m.id)) {
-        total += parseFloat(item.total_price ?? 0) / assignees.length;
+        total += parsePriceValue(itemPrices[item.id] ?? item.total_price) / assignees.length;
         itemCount++;
       }
     });
@@ -183,12 +297,12 @@ function EmptyItems({ onScanReceipt, billId }) {
   );
 }
 
-function BottomActions({ insets, items, assignmentMap, onSend }) {
+function BottomActions({ insets, items, assignmentMap, itemPrices, onSend }) {
   const totalItems = items.length;
   const assignedItems = items.filter((i) => (assignmentMap[i.id] || []).length > 0).length;
   const subtotal = items.reduce((sum, i) => {
     if ((assignmentMap[i.id] || []).length > 0) {
-      return sum + parseFloat(i.total_price ?? 0);
+      return sum + parsePriceValue(itemPrices[i.id] ?? i.total_price);
     }
     return sum;
   }, 0);
@@ -225,15 +339,63 @@ export default function BillSplitScreen({ navigation, route }) {
   const [assignmentMap, setAssignmentMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingItemEdits, setSavingItemEdits] = useState(false);
+  const [isEditingItems, setIsEditingItems] = useState(false);
+  const [nextDraftItemId, setNextDraftItemId] = useState(1);
+  const [itemQuantities, setItemQuantities] = useState({});
+  const [itemNames, setItemNames] = useState({});
+  const [itemPrices, setItemPrices] = useState({});
+  const [originalItemSnapshots, setOriginalItemSnapshots] = useState({});
+  const [removedItemIds, setRemovedItemIds] = useState({});
+
+  const applyServerItemState = useCallback((nextBill, nextItems, preserveAssignments = false) => {
+    setBill(nextBill);
+    setItems(nextItems);
+
+    const quantities = {};
+    const names = {};
+    const prices = {};
+    const snapshots = {};
+
+    (nextItems ?? []).forEach((item) => {
+      const quantity = typeof item.quantity === 'number' ? item.quantity : 0;
+      const name = item.name ?? '';
+      const totalPrice = parsePriceValue(item.total_price ?? 0).toFixed(2);
+      quantities[item.id] = quantity;
+      names[item.id] = name;
+      prices[item.id] = totalPrice;
+      snapshots[item.id] = {
+        name: normalizeItemName(name),
+        quantity,
+        totalPrice,
+      };
+    });
+
+    setItemQuantities(quantities);
+    setItemNames(names);
+    setItemPrices(prices);
+    setOriginalItemSnapshots(snapshots);
+    setRemovedItemIds({});
+    setNextDraftItemId(1);
+
+    if (preserveAssignments) {
+      setAssignmentMap((prev) => {
+        const nextMap = {};
+        (nextItems ?? []).forEach((item) => {
+          nextMap[item.id] = prev[item.id] || [];
+        });
+        return nextMap;
+      });
+    }
+  }, []);
 
   const fetchSummary = useCallback(async () => {
     if (!billId) return;
     try {
       const res = await billsApi.getSummary(billId);
       const data = res.data;
-      setBill(data.bill);
       setMembers(data.members ?? []);
-      setItems(data.items ?? []);
+      applyServerItemState(data.bill, data.items ?? []);
 
       const map = {};
       (data.items ?? []).forEach((item) => {
@@ -247,7 +409,7 @@ export default function BillSplitScreen({ navigation, route }) {
     } catch {
       // keep whatever state we have
     }
-  }, [billId]);
+  }, [applyServerItemState, billId]);
 
   useEffect(() => {
     fetchSummary().finally(() => setLoading(false));
@@ -264,9 +426,189 @@ export default function BillSplitScreen({ navigation, route }) {
     });
   };
 
+  const handleIncrementQuantity = (itemId) => {
+    setItemQuantities((prev) => ({
+      ...prev,
+      [itemId]: (prev[itemId] ?? 0) + 1,
+    }));
+  };
+
+  const handleDecrementQuantity = (itemId) => {
+    setItemQuantities((prev) => ({
+      ...prev,
+      [itemId]: Math.max(0, (prev[itemId] ?? 0) - 1),
+    }));
+  };
+
+  const handleRemoveItem = (itemId) => {
+    setRemovedItemIds((prev) => ({
+      ...prev,
+      [itemId]: true,
+    }));
+  };
+
+  const handleNameChange = (itemId, value) => {
+    setItemNames((prev) => ({
+      ...prev,
+      [itemId]: value,
+    }));
+  };
+
+  const handlePriceChange = (itemId, value) => {
+    setItemPrices((prev) => ({
+      ...prev,
+      [itemId]: formatPriceInput(value),
+    }));
+  };
+
+  const handleAddItem = () => {
+    const draftId = `draft-item-${nextDraftItemId}`;
+    setNextDraftItemId((prev) => prev + 1);
+
+    const draftItem = {
+      id: draftId,
+      name: '',
+      quantity: 1,
+      total_price: 0,
+      unit_price: 0,
+    };
+
+    setItems((prev) => [draftItem, ...prev]);
+    setItemQuantities((prev) => ({
+      ...prev,
+      [draftId]: 1,
+    }));
+    setItemNames((prev) => ({
+      ...prev,
+      [draftId]: '',
+    }));
+    setItemPrices((prev) => ({
+      ...prev,
+      [draftId]: '0.00',
+    }));
+    setAssignmentMap((prev) => ({
+      ...prev,
+      [draftId]: [],
+    }));
+    setRemovedItemIds((prev) => {
+      if (!prev[draftId]) return prev;
+      const next = { ...prev };
+      delete next[draftId];
+      return next;
+    });
+  };
+
+  const visibleItems = items.filter((item) => !removedItemIds[item.id]);
+  const visibleItemIds = new Set(visibleItems.map((item) => item.id));
+
+  const getCurrentItemDraft = useCallback((item) => ({
+    id: `${item.id}`,
+    name: normalizeItemName(itemNames[item.id] ?? item.name ?? ''),
+    quantity: itemQuantities[item.id] ?? item.quantity ?? 0,
+    totalPrice: parsePriceValue(itemPrices[item.id] ?? item.total_price ?? 0).toFixed(2),
+  }), [itemNames, itemPrices, itemQuantities]);
+
+  const buildReceiptEditPayload = useCallback(() => {
+    const creates = [];
+    const updates = [];
+    const deletes = [];
+
+    for (const item of items) {
+      const current = getCurrentItemDraft(item);
+      const isRemoved = removedItemIds[item.id] || current.quantity <= 0;
+      const isDraft = isDraftItemId(item.id);
+
+      if (isRemoved) {
+        if (!isDraft) {
+          deletes.push(current.id);
+        }
+        continue;
+      }
+
+      if (!current.name) {
+        throw new Error('Every item needs a name before saving.');
+      }
+      if (parsePriceValue(current.totalPrice) <= 0) {
+        throw new Error('Every item needs a price greater than $0.00 before saving.');
+      }
+      if (current.quantity <= 0) {
+        throw new Error('Every item needs a quantity greater than 0 before saving.');
+      }
+
+      if (isDraft) {
+        creates.push({
+          name: current.name,
+          quantity: current.quantity,
+          total_price: current.totalPrice,
+        });
+        continue;
+      }
+
+      const original = originalItemSnapshots[item.id];
+      const hasChanged = !original
+        || current.name !== original.name
+        || current.quantity !== original.quantity
+        || current.totalPrice !== original.totalPrice;
+
+      if (hasChanged) {
+        updates.push({
+          id: current.id,
+          name: current.name,
+          quantity: current.quantity,
+          total_price: current.totalPrice,
+        });
+      }
+    }
+
+    return { creates, updates, deletes };
+  }, [getCurrentItemDraft, items, originalItemSnapshots, removedItemIds]);
+
+  const handleEditItemsPress = useCallback(async () => {
+    if (savingItemEdits) return;
+
+    if (!isEditingItems) {
+      setIsEditingItems(true);
+      return;
+    }
+
+    let payload;
+    try {
+      payload = buildReceiptEditPayload();
+    } catch (err) {
+      Alert.alert('Finish edits', err?.message ?? 'Please complete your item edits before saving.');
+      return;
+    }
+
+    const hasChanges = payload.creates.length > 0
+      || payload.updates.length > 0
+      || payload.deletes.length > 0;
+
+    if (!hasChanges) {
+      setIsEditingItems(false);
+      return;
+    }
+
+    setSavingItemEdits(true);
+    try {
+      const res = await receiptsApi.syncItems(billId, payload);
+      applyServerItemState(res.data.bill, res.data.items ?? [], true);
+      setIsEditingItems(false);
+    } catch (err) {
+      Alert.alert('Error', err?.error?.message ?? 'Failed to save receipt edits');
+    } finally {
+      setSavingItemEdits(false);
+    }
+  }, [applyServerItemState, billId, buildReceiptEditPayload, isEditingItems, savingItemEdits]);
+
   const handleSend = async () => {
+    if (isEditingItems || savingItemEdits) {
+      Alert.alert('Save items first', 'Tap Done to save your receipt edits before sending to members.');
+      return;
+    }
+
     const assignmentsList = [];
     Object.entries(assignmentMap).forEach(([itemId, memberIds]) => {
+      if (!visibleItemIds.has(itemId)) return;
       memberIds.forEach((memberId) => {
         assignmentsList.push({
           receipt_item_id: itemId,
@@ -338,34 +680,93 @@ export default function BillSplitScreen({ navigation, route }) {
         ) : (
           <>
             <View style={styles.assignSection}>
-              <Text style={styles.assignTitle}>Assign Items</Text>
-              {items.map((item) => (
+              <View style={styles.assignHeader}>
+                <Text style={styles.assignTitle}>Assign Items</Text>
+                <View style={styles.assignActions}>
+                  {isEditingItems && (
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={handleAddItem}
+                      disabled={savingItemEdits}
+                    >
+                      <LinearGradient
+                        colors={[colors.secondary, colors.secondaryDim]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={[
+                          styles.addItemButton,
+                          shadows.settleButton,
+                          savingItemEdits && styles.headerButtonDisabled,
+                        ]}
+                      >
+                        <MaterialIcons name="add" size={18} color={colors.onSecondary} />
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handleEditItemsPress}
+                    disabled={savingItemEdits}
+                  >
+                    <LinearGradient
+                      colors={[colors.secondary, colors.secondaryDim]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={[
+                        styles.editItemsButton,
+                        shadows.settleButton,
+                        savingItemEdits && styles.headerButtonDisabled,
+                      ]}
+                    >
+                      {savingItemEdits ? (
+                        <ActivityIndicator size="small" color={colors.onSecondary} />
+                      ) : (
+                        <Text style={styles.editItemsButtonText}>
+                          {isEditingItems ? 'Done' : 'Edit Items'}
+                        </Text>
+                      )}
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              </View>
+              {visibleItems.map((item) => (
                 <BillItemCard
                   key={item.id}
                   item={item}
                   members={members}
                   assignedMemberIds={assignmentMap[item.id] || []}
                   onToggleMember={handleToggleMember}
+                  isEditingItems={isEditingItems}
+                  quantity={itemQuantities[item.id] ?? item.quantity ?? 0}
+                  name={itemNames[item.id] ?? item.name ?? ''}
+                  onNameChange={(value) => handleNameChange(item.id, value)}
+                  price={itemPrices[item.id] ?? parsePriceValue(item.total_price ?? 0).toFixed(2)}
+                  onPriceChange={(value) => handlePriceChange(item.id, value)}
+                  onDecrementQuantity={() => handleDecrementQuantity(item.id)}
+                  onIncrementQuantity={() => handleIncrementQuantity(item.id)}
+                  onRemoveItem={() => handleRemoveItem(item.id)}
                 />
               ))}
             </View>
 
-            {members.length > 0 && (
+            {members.length > 0 && visibleItems.length > 0 && (
               <MembersSummary
                 members={members}
-                items={items}
+                items={visibleItems}
                 assignmentMap={assignmentMap}
+                itemPrices={itemPrices}
               />
             )}
           </>
         )}
       </ScrollView>
 
-      {items.length > 0 && (
+      {visibleItems.length > 0 && (
         <BottomActions
           insets={insets}
-          items={items}
+          items={visibleItems}
           assignmentMap={assignmentMap}
+          itemPrices={itemPrices}
           onSend={handleSend}
         />
       )}
@@ -538,14 +939,49 @@ const styles = StyleSheet.create({
   },
 
   assignSection: { marginBottom: 32 },
+  assignHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingHorizontal: 2,
+    gap: 12,
+  },
   assignTitle: {
     fontFamily: 'Manrope_700Bold',
     fontSize: 18,
     fontWeight: '700',
     letterSpacing: -0.3,
     color: colors.onSurface,
-    marginBottom: 16,
-    paddingHorizontal: 2,
+    flexShrink: 1,
+  },
+  assignActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  addItemButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerButtonDisabled: {
+    opacity: 0.7,
+  },
+  editItemsButton: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: radii.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editItemsButtonText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.onSecondary,
   },
 
   itemCard: {
@@ -562,6 +998,11 @@ const styles = StyleSheet.create({
     borderColor: colors.outlineVariant,
     opacity: 0.95,
   },
+  itemCardZeroQuantity: {
+    backgroundColor: colors.errorContainer,
+    borderWidth: 1.5,
+    borderColor: '#efb8b6',
+  },
   itemCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -576,6 +1017,17 @@ const styles = StyleSheet.create({
     color: colors.onSurface,
     marginBottom: 2,
   },
+  itemNameInput: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.onSurface,
+    marginBottom: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceContainerHigh,
+    paddingBottom: 4,
+    paddingRight: 12,
+  },
   itemPrice: {
     fontFamily: 'Inter_400Regular',
     fontSize: 14,
@@ -586,6 +1038,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     color: colors.error,
+  },
+  removeItemButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.error,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: radii.full,
+    marginBottom: 14,
+  },
+  removeItemButtonText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.onError,
   },
   unassignedIcon: {
     width: 32,
@@ -609,11 +1075,48 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.secondary,
   },
+  quantityEditor: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.secondaryContainer,
+    borderRadius: radii.full,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    gap: 2,
+  },
+  quantityAction: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceContainerLowest,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quantityActionDisabled: {
+    backgroundColor: colors.surfaceContainerHigh,
+  },
+  quantityValue: {
+    minWidth: 24,
+    textAlign: 'center',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.secondary,
+  },
 
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  itemCardFooter: {
+    marginTop: 2,
+  },
+  itemCardFooterEditing: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 12,
   },
   chip: {
     paddingHorizontal: 16,
@@ -629,6 +1132,45 @@ const styles = StyleSheet.create({
   },
   chipTextActive: { color: colors.onSecondary },
   chipTextInactive: { color: colors.onSurfaceVariant },
+  priceEditorWrap: {
+    minWidth: 120,
+    alignItems: 'flex-end',
+  },
+  priceEditorLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.onSurfaceVariant,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 6,
+  },
+  priceEditorField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceContainerLowest,
+    borderWidth: 1,
+    borderColor: colors.surfaceContainerHigh,
+    borderRadius: radii.full,
+    paddingHorizontal: 12,
+    minHeight: 40,
+  },
+  priceEditorCurrency: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.secondary,
+    marginRight: 4,
+  },
+  priceEditorInput: {
+    minWidth: 56,
+    paddingVertical: 8,
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.onSurface,
+    textAlign: 'right',
+  },
 
   membersSection: {
     backgroundColor: colors.surfaceContainerLow,

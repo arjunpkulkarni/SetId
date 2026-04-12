@@ -154,6 +154,9 @@ export const receipts = {
 
   listItems: (billId) => client.get(`/bills/${billId}/receipt/items`),
 
+  syncItems: (billId, payload) =>
+    client.post(`/bills/${billId}/receipt/items/sync`, payload),
+
   updateItem: (billId, itemId, fields) =>
     client.patch(`/bills/${billId}/receipt/items/${itemId}`, fields),
 };
