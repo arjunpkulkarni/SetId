@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     APPLE_BUNDLE_ID: str = ""
     APPLE_PRIVATE_KEY_PATH: str = "./apple_private_key.p8"
 
+    # Twilio Verify (SMS OTP). Leave empty to use OTP_DEV_MODE only.
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_VERIFY_SERVICE_SID: str = ""
+
+    # When true (or when Twilio is not configured), use in-memory OTP for local/dev.
+    OTP_DEV_MODE: bool = False
+
+    # Max OTP send attempts per E.164 phone per rolling hour (in addition to IP limits)
+    OTP_MAX_SENDS_PER_PHONE_PER_HOUR: int = 5
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

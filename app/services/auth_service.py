@@ -3,6 +3,13 @@ from sqlalchemy.orm import Session
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.user import User
 from app.services.apple_auth_service import AppleAuthService
+from app.services.otp_service import OtpProviderError, verify_otp as verify_otp_code
+from app.utils.phone import normalize_to_e164
+
+
+def _synthetic_email_from_phone(e164: str) -> str:
+    digits = "".join(c for c in e164 if c.isdigit())
+    return f"{digits}@phone.users.spltr"
 
 
 class AuthService:
@@ -106,3 +113,55 @@ class AuthService:
             
         except Exception as e:
             raise ValueError(f"Apple Sign In failed: {str(e)}")
+
+    def get_or_create_user_for_phone(self, phone_e164: str, display_name: str) -> User:
+        """display_name: trimmed first name (or fallback label for legacy)."""
+        label = display_name.strip() if display_name else "Member"
+        if not label:
+            label = "Member"
+
+        user = self.db.query(User).filter(User.phone == phone_e164).first()
+        if user:
+            if not user.is_active:
+                raise ValueError("ACCOUNT_DISABLED")
+            user.full_name = label
+            self.db.commit()
+            self.db.refresh(user)
+            return user
+
+        email = _synthetic_email_from_phone(phone_e164)
+        if self.db.query(User).filter(User.email == email).first():
+            raise ValueError("EMAIL_CONFLICT")
+
+        user = User(
+            email=email,
+            password_hash=None,
+            full_name=label,
+            phone=phone_e164,
+            auth_provider="phone",
+        )
+        self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def complete_phone_otp(self, phone_raw: str, code: str, first_name: str) -> tuple[User, str]:
+        try:
+            phone_e164 = normalize_to_e164(phone_raw)
+        except ValueError as e:
+            raise ValueError("INVALID_PHONE") from e
+
+        try:
+            status = verify_otp_code(phone_e164, code)
+        except OtpProviderError:
+            raise
+
+        if status == "invalid":
+            raise ValueError("INVALID_OTP")
+        if status == "expired":
+            raise ValueError("OTP_EXPIRED")
+
+        display = (first_name or "").strip() or "Member"
+        user = self.get_or_create_user_for_phone(phone_e164, display)
+        token = create_access_token(str(user.id))
+        return user, token

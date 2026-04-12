@@ -2,9 +2,9 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from app.core.config import settings
 from app.middleware.error_handler import register_error_handlers
+from app.limiter import limiter
 from app.api.routes import (
     auth,
     users,
@@ -35,6 +35,8 @@ app.add_middleware(
 )
 
 register_error_handlers(app)
+
+app.state.limiter = limiter
 
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 
