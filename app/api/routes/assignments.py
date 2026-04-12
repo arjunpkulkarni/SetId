@@ -1,10 +1,12 @@
+import logging
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
+from app.models.bill import Bill
 from app.models.user import User
 from app.core.response import success_response, error_response
 from app.schemas.item_assignment import (
@@ -14,8 +16,20 @@ from app.schemas.item_assignment import (
     AutoSplitRequest,
 )
 from app.services.calculation_service import CalculationService
+from app.services.payment_notification_service import PaymentNotificationService
 
 router = APIRouter(prefix="/bills/{bill_id}", tags=["Assignments"])
+logger = logging.getLogger(__name__)
+
+
+def _schedule_payment_sms(bill_id: str, owner_id: str) -> None:
+    db = SessionLocal()
+    try:
+        PaymentNotificationService(db).sync_request_sms_for_bill(bill_id, owner_id)
+    except Exception:
+        logger.exception("Payment notification SMS failed for bill %s", bill_id)
+    finally:
+        db.close()
 
 
 def _assignment_out(assignment) -> dict:
@@ -29,6 +43,7 @@ def _assignment_out(assignment) -> dict:
 def create_assignments(
     bill_id: uuid.UUID,
     body: AssignmentBulkCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -38,6 +53,15 @@ def create_assignments(
         assignments = svc.create_assignments(str(bill_id), assignments_dicts)
     except ValueError as e:
         return error_response("BAD_REQUEST", str(e), 400)
+
+    if body.send_payment_notifications:
+        bill = db.query(Bill).filter(Bill.id == bill_id).first()
+        if bill and str(bill.owner_id) == str(current_user.id):
+            background_tasks.add_task(
+                _schedule_payment_sms,
+                str(bill_id),
+                str(current_user.id),
+            )
 
     # Refresh relationships for serialization
     for a in assignments:
@@ -109,12 +133,22 @@ def delete_assignment(
 def auto_split(
     bill_id: uuid.UUID,
     body: AutoSplitRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     svc = CalculationService(db)
     member_ids = [str(mid) for mid in body.member_ids] if body.member_ids else None
     assignments = svc.auto_split(str(bill_id), member_ids)
+
+    if body.send_payment_notifications:
+        bill = db.query(Bill).filter(Bill.id == bill_id).first()
+        if bill and str(bill.owner_id) == str(current_user.id):
+            background_tasks.add_task(
+                _schedule_payment_sms,
+                str(bill_id),
+                str(current_user.id),
+            )
 
     # Refresh relationships for serialization
     for a in assignments:

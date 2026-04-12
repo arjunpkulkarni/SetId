@@ -1,4 +1,5 @@
 import logging
+import secrets
 from decimal import Decimal
 from uuid import uuid4
 
@@ -9,6 +10,29 @@ from app.models.bill_member import BillMember
 from app.models.payment import Payment
 
 logger = logging.getLogger(__name__)
+
+
+def _stripe_intent_for_payment(
+    bill_id: str, member_id: str, amount: Decimal, currency: str
+) -> tuple[str, str]:
+    if settings.STRIPE_SECRET_KEY:
+        import stripe
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        amount_in_cents = int(amount * 100)
+        intent = stripe.PaymentIntent.create(
+            amount=amount_in_cents,
+            currency=currency.lower(),
+            metadata={
+                "bill_id": str(bill_id),
+                "member_id": str(member_id),
+            },
+        )
+        return intent.id, intent.client_secret or ""
+
+    stripe_pi_id = f"pi_mock_{uuid4().hex[:16]}"
+    stripe_client_secret = f"pi_mock_{uuid4().hex[:16]}_secret_{uuid4().hex[:8]}"
+    return stripe_pi_id, stripe_client_secret
 
 
 class PaymentService:
@@ -23,30 +47,31 @@ class PaymentService:
         amount: Decimal,
         currency: str = "USD",
     ) -> Payment:
-        stripe_pi_id = None
-        stripe_client_secret = None
-
-        if settings.STRIPE_SECRET_KEY:
-            import stripe
-
-            stripe.api_key = settings.STRIPE_SECRET_KEY
-
-            amount_in_cents = int(amount * 100)
-            intent = stripe.PaymentIntent.create(
-                amount=amount_in_cents,
-                currency=currency.lower(),
-                metadata={
-                    "bill_id": str(bill_id),
-                    "member_id": str(member_id),
-                },
+        existing = (
+            self.db.query(Payment)
+            .filter(
+                Payment.bill_id == bill_id,
+                Payment.bill_member_id == member_id,
+                Payment.status == "pending",
             )
-            stripe_pi_id = intent.id
-            stripe_client_secret = intent.client_secret
-        else:
-            stripe_pi_id = f"pi_mock_{uuid4().hex[:16]}"
-            stripe_client_secret = (
-                f"pi_mock_{uuid4().hex[:16]}_secret_{uuid4().hex[:8]}"
-            )
+            .first()
+        )
+
+        stripe_pi_id, stripe_client_secret = _stripe_intent_for_payment(
+            bill_id, member_id, amount, currency
+        )
+
+        if existing:
+            existing.amount = amount
+            existing.user_id = user_id
+            existing.currency = currency
+            existing.stripe_payment_intent_id = stripe_pi_id
+            existing.stripe_client_secret = stripe_client_secret
+            if not existing.payment_link_token:
+                existing.payment_link_token = secrets.token_urlsafe(32)
+            self.db.commit()
+            self.db.refresh(existing)
+            return existing
 
         payment = Payment(
             bill_id=bill_id,
@@ -57,8 +82,38 @@ class PaymentService:
             status="pending",
             stripe_payment_intent_id=stripe_pi_id,
             stripe_client_secret=stripe_client_secret,
+            payment_link_token=secrets.token_urlsafe(32),
         )
         self.db.add(payment)
+        self.db.commit()
+        self.db.refresh(payment)
+        return payment
+
+    def get_payment_by_link_token(self, token: str) -> Payment | None:
+        return (
+            self.db.query(Payment)
+            .filter(Payment.payment_link_token == token)
+            .first()
+        )
+
+    def ensure_stripe_client_for_payment(self, payment_id: str) -> Payment:
+        """Attach a Stripe PaymentIntent when user opens the public pay link."""
+        payment = self.get_payment(payment_id)
+        if not payment:
+            raise ValueError("NOT_FOUND")
+        if payment.status != "pending":
+            return payment
+        if payment.stripe_client_secret:
+            return payment
+
+        stripe_pi_id, stripe_client_secret = _stripe_intent_for_payment(
+            str(payment.bill_id),
+            str(payment.bill_member_id),
+            payment.amount,
+            payment.currency or "USD",
+        )
+        payment.stripe_payment_intent_id = stripe_pi_id
+        payment.stripe_client_secret = stripe_client_secret
         self.db.commit()
         self.db.refresh(payment)
         return payment

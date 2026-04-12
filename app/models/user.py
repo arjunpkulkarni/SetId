@@ -35,3 +35,4 @@ class User(Base):
     bill_memberships = relationship("BillMember", back_populates="user")
     payments = relationship("Payment", back_populates="user")
     notifications = relationship("Notification", back_populates="user")
+    sms_logs = relationship("SmsLog", back_populates="user")

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +33,16 @@ class Payment(Base):
     stripe_client_secret: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )
+    # Opaque token for public /pay/{token} (never use raw UUID in links)
+    payment_link_token: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
+    )
+    last_reminder_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    payment_request_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -43,3 +53,4 @@ class Payment(Base):
     bill = relationship("Bill", back_populates="payments")
     member = relationship("BillMember", back_populates="payments")
     user = relationship("User", back_populates="payments")
+    sms_logs = relationship("SmsLog", back_populates="payment")

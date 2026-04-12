@@ -7,6 +7,7 @@ from app.models.item_assignment import ItemAssignment
 from app.models.payment import Payment
 from app.models.settlement import Settlement
 from app.models.notification import Notification
+from app.models.sms_log import SmsLog
 
 __all__ = [
     "User",
@@ -18,4 +19,5 @@ __all__ = [
     "Payment",
     "Settlement",
     "Notification",
+    "SmsLog",
 ]

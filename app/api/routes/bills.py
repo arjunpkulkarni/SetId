@@ -17,6 +17,7 @@ from app.services.bill_service import BillService
 from app.services.receipt_parser_service import ReceiptParserService
 from app.services.calculation_service import CalculationService
 from app.services.payment_service import PaymentService
+from app.services.payment_notification_service import PaymentNotificationService
 
 router = APIRouter(prefix="/bills", tags=["Bills"])
 
@@ -98,6 +99,31 @@ def delete_bill(
         return error_response("NOT_FOUND", "Bill not found", 404)
 
     return success_response(message="Bill deleted")
+
+
+@router.post("/{bill_id}/send-payment-requests")
+def send_payment_requests(
+    bill_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Owner-only: upsert pending payments and send SMS with pay links."""
+    svc = PaymentNotificationService(db)
+    try:
+        data = svc.sync_request_sms_for_bill(str(bill_id), str(current_user.id))
+    except ValueError as e:
+        code = str(e)
+        if code == "NOT_FOUND":
+            return error_response("NOT_FOUND", "Bill not found", 404)
+        if code == "FORBIDDEN":
+            return error_response(
+                "FORBIDDEN",
+                "Only the bill owner can send payment requests",
+                403,
+            )
+        return error_response("ERROR", code, 400)
+
+    return success_response(data=data, message="Payment requests processed")
 
 
 @router.get("/{bill_id}/summary")

@@ -13,6 +13,7 @@ class AssignmentCreate(BaseModel):
 
 class AssignmentBulkCreate(BaseModel):
     assignments: list[AssignmentCreate]
+    send_payment_notifications: bool = True
 
 
 class AssignmentUpdate(BaseModel):
@@ -35,3 +36,4 @@ class AssignmentOut(BaseModel):
 
 class AutoSplitRequest(BaseModel):
     member_ids: list[uuid.UUID] | None = None
+    send_payment_notifications: bool = True
