@@ -69,8 +69,12 @@ export default function PhoneAuthScreen({ navigation }) {
     setError(null);
     try {
       const body = await authApi.sendOtp(e164);
-      unwrap(body);
-      navigation.navigate('VerifyOTP', { phone: e164, firstName: firstName.trim() });
+      const data = unwrap(body);
+      navigation.navigate('VerifyOTP', {
+        phone: e164,
+        firstName: firstName.trim(),
+        otpDevMode: Boolean(data?.otp_dev_mode),
+      });
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'ERROR';
       const msg = err instanceof ApiError ? err.message : String(err?.message ?? err);

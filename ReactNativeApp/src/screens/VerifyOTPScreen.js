@@ -36,6 +36,7 @@ export default function VerifyOTPScreen({ navigation, route }) {
   const { completePhoneAuth } = useAuth();
   const phone = route.params?.phone ?? '';
   const firstName = (route.params?.firstName ?? '').trim();
+  const [otpDevMode, setOtpDevMode] = useState(Boolean(route.params?.otpDevMode));
   const inputRef = useRef(null);
 
   const [code, setCode] = useState('');
@@ -76,7 +77,8 @@ export default function VerifyOTPScreen({ navigation, route }) {
     setError(null);
     try {
       const body = await authApi.sendOtp(phone);
-      unwrap(body);
+      const data = unwrap(body);
+      setOtpDevMode(Boolean(data?.otp_dev_mode));
       setCooldown(COOLDOWN_SEC);
     } catch (err) {
       const c = err instanceof ApiError ? err.code : 'ERROR';
@@ -137,12 +139,12 @@ export default function VerifyOTPScreen({ navigation, route }) {
           </Text>
         ) : null}
 
-        {__DEV__ ? (
+        {otpDevMode ? (
           <View style={styles.devHint}>
             <MaterialIcons name="terminal" size={18} color={colors.onSecondaryContainer} />
             <Text style={styles.devHintText}>
-              Development mode: no real SMS is sent. Find the 6-digit code in the terminal
-              where the API is running (log line starts with OTP dev mode).
+              Dev OTP: no SMS is sent. Use the 6-digit code from the API terminal (log line
+              starts with "OTP dev mode").
             </Text>
           </View>
         ) : null}
