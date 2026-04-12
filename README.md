@@ -130,7 +130,7 @@ pip install -r requirements.txt
 
 # 3. Copy and edit env
 cp .env.example .env
-# Edit DATABASE_URL, JWT_SECRET_KEY, STRIPE keys
+# Edit DATABASE_URL, JWT_SECRET_KEY, STRIPE keys, and GROQ_API_KEY
 
 # 4. Start Postgres (requires a local instance or use Docker just for DB)
 docker compose up db -d
@@ -161,6 +161,11 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES=1440
 STRIPE_SECRET_KEY=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_PUBLISHABLE_KEY=pk_test_...
+
+GROQ_API_KEY=gsk_...
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_RECEIPT_VISION_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
+GROQ_RECEIPT_CLEANUP_MODEL=openai/gpt-oss-20b
 
 UPLOAD_DIR=./uploads
 
@@ -254,11 +259,11 @@ Authentication uses stateless JWT tokens (Bearer scheme).
 
 ## Receipt Parsing
 
-`POST /bills/{bill_id}/receipt/parse` currently uses a **mock OCR service** (`ReceiptParserService`) that returns a realistic 6-item restaurant receipt. To wire in real OCR (Google Vision, AWS Textract, etc.):
+`POST /bills/{bill_id}/receipt/parse` uses a two-step Groq-backed AI pipeline in `ReceiptParserService`:
 
-1. Open `app/services/receipt_parser_service.py`
-2. Replace the `mock_items_data` block in `parse_receipt()` with your OCR provider call
-3. Map the provider's output to `ReceiptItem` fields — the rest of the pipeline stays the same
+1. A Groq vision-capable model extracts raw receipt text from the uploaded image
+2. A Groq cleanup pass converts that OCR text into structured JSON
+3. The backend normalizes that JSON into `ReceiptItem` rows plus bill subtotal/tax/total
 
 ---
 
@@ -318,7 +323,7 @@ curl -X POST http://localhost:8000/bills/<bill_id>/receipt/upload \
   -F "file=@/path/to/receipt.jpg"
 ```
 
-### Parse the receipt (mock OCR)
+### Parse the receipt
 ```bash
 curl -X POST http://localhost:8000/bills/<bill_id>/receipt/parse \
   -H "Authorization: Bearer $TOKEN"
@@ -452,7 +457,7 @@ const getDashboard = async (token) => {
 
 2. **Invite tokens are in-memory** (`BillService._invite_tokens` dict). This resets on server restart and doesn't work across multiple API instances. For production, move tokens to a `bill_invites` DB table or Redis.
 
-3. **Receipt parsing is mocked.** `ReceiptParserService.parse_receipt()` always returns the same 6 restaurant items. Drop in any OCR provider by editing that one method.
+3. **Receipt parsing uses Groq.** The parser uploads receipt images to a vision-capable Groq model for raw OCR, then runs a structured cleanup pass to produce line items, tax, and total.
 
 4. **Tax/tip/fee distribution** is proportional to each member's item subtotal. Members with zero assigned items get zero shares.
 
@@ -532,22 +537,16 @@ Protected routes require `Authorization: Bearer <token>`.
 |---|---|---|---|
 | POST | `/bills/{bill_id}/receipt/upload` | Yes | Upload receipt image (multipart/form-data, field: `file`) |
 | GET | `/bills/{bill_id}/receipt` | Yes | Get receipt upload metadata |
-| POST | `/bills/{bill_id}/receipt/parse` | Yes | Parse receipt → returns `{merchant_name, items[], subtotal, tax, total}` |
+| POST | `/bills/{bill_id}/receipt/parse` | Yes | Parse receipt → returns `{items[], tax, total, merchant_name?, subtotal?, warnings[]}` |
 | GET | `/bills/{bill_id}/receipt/items` | Yes | List all parsed receipt items |
 | PATCH | `/bills/{bill_id}/receipt/items/{item_id}` | Yes | Edit item. Body: `{name?, quantity?, unit_price?, total_price?, category?, is_taxable?}` |
 
 **ParsedReceipt item shape:**
 ```json
 {
-  "id": "uuid",
-  "name": "Margherita Pizza",
-  "quantity": 1,
-  "unit_price": "14.99",
-  "total_price": "14.99",
-  "category": "Entree",
-  "confidence": 0.95,
-  "is_taxable": true,
-  "sort_order": 0
+  "name": "Tacos Del Mar Shrimp",
+  "price": "14.98",
+  "quantity": 1
 }
 ```
 

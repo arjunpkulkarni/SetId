@@ -21,6 +21,9 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    # Override: inside the container, Postgres is the `db` service — not localhost.
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/wealthsplit
     depends_on:
       db:
         condition: service_healthy

@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PUBLISHABLE_KEY: str = ""
 
+    GROQ_API_KEY: str = ""
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    GROQ_RECEIPT_VISION_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    GROQ_RECEIPT_CLEANUP_MODEL: str = "openai/gpt-oss-20b"
+
     UPLOAD_DIR: str = "./uploads"
 
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
@@ -47,6 +52,16 @@ class Settings(BaseSettings):
 
     # Run reminder job on interval (seconds); 0 disables in-process scheduler
     REMINDER_JOB_INTERVAL_SEC: int = 3600
+    # Twilio Verify (SMS OTP). Leave empty to use OTP_DEV_MODE only.
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_VERIFY_SERVICE_SID: str = ""
+
+    # When true (or when Twilio is not configured), use in-memory OTP for local/dev.
+    OTP_DEV_MODE: bool = False
+
+    # Max OTP send attempts per E.164 phone per rolling hour (in addition to IP limits)
+    OTP_MAX_SENDS_PER_PHONE_PER_HOUR: int = 5
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
