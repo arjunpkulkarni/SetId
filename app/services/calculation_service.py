@@ -337,7 +337,12 @@ class CalculationService:
         bill_subtotal = bill.subtotal or Decimal("0")
         bill_tax = bill.tax or Decimal("0")
         bill_tip = bill.tip or Decimal("0")
+        
+        # Auto-calculate service fee if not set (for backwards compatibility with old bills)
         bill_fee = bill.service_fee or Decimal("0")
+        if bill_fee == Decimal("0") and bill_subtotal > 0:
+            # Calculate fee on-the-fly using defaults
+            bill_fee = self.calculate_service_fee(bill_id)
 
         member_breakdowns = []
         total_paid_all = Decimal("0")
