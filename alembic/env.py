@@ -28,7 +28,8 @@ def run_migrations_offline() -> None:
     Calls to context.execute() here emit the given string to the
     script output.
     """
-    url = settings.DATABASE_URL
+    # Use direct URL for migrations (bypasses connection pooling)
+    url = settings.DIRECT_DATABASE_URL or settings.DATABASE_URL
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -47,7 +48,8 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
     """
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.DATABASE_URL
+    # Use direct URL for migrations (bypasses connection pooling)
+    configuration["sqlalchemy.url"] = settings.DIRECT_DATABASE_URL or settings.DATABASE_URL
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",

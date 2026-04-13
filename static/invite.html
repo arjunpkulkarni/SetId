@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>You're Invited — WealthSplit</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;
+         background:#f5f5f7;color:#1d1d1f;min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .card{background:#fff;border-radius:20px;box-shadow:0 4px 24px rgba(0,0,0,.08);
+          max-width:420px;width:90%;padding:32px 24px;text-align:center}
+    .logo{font-size:28px;font-weight:700;color:#007aff;margin-bottom:4px}
+    .subtitle{color:#86868b;font-size:14px;margin-bottom:24px}
+    .invite-from{font-size:15px;color:#86868b;margin-bottom:4px}
+    .bill-title{font-size:22px;font-weight:600;margin-bottom:6px}
+    .merchant{font-size:15px;color:#86868b;margin-bottom:20px}
+    .detail-row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f0f0f0;font-size:15px}
+    .detail-row:last-child{border-bottom:none}
+    .label{color:#86868b}
+    .value{font-weight:600}
+    .cta{display:block;width:100%;padding:14px;border:none;border-radius:12px;
+         background:#007aff;color:#fff;font-size:17px;font-weight:600;cursor:pointer;
+         margin-top:24px;text-decoration:none;transition:background .2s}
+    .cta:hover{background:#0062cc}
+    .alt-link{display:block;margin-top:12px;font-size:13px;color:#86868b}
+    .alt-link a{color:#007aff;text-decoration:none}
+    .error{color:#ff3b30;font-size:16px;margin-top:24px}
+    .loading{color:#86868b;font-size:16px;margin-top:24px}
+    #details{display:none}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">WealthSplit</div>
+    <div class="subtitle">Bill Splitting Made Easy</div>
+
+    <div id="loading" class="loading">Loading invite...</div>
+    <div id="error" class="error" style="display:none"></div>
+
+    <div id="details">
+      <p class="invite-from"><span id="ownerName"></span> invited you to split</p>
+      <h2 class="bill-title" id="billTitle"></h2>
+      <p class="merchant" id="merchant"></p>
+
+      <div id="detailRows"></div>
+
+      <a id="deepLink" class="cta" href="#">Open in App</a>
+      <div class="alt-link">
+        Don't have the app? <a href="https://apps.apple.com/app/wealthsplit" target="_blank">Download WealthSplit</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const token = window.location.pathname.split('/invite/')[1]?.split('/')[0];
+
+    async function loadInvite() {
+      if (!token) { showError('Invalid invite link.'); return; }
+
+      try {
+        const resp = await fetch(`/invite/${token}`);
+        const json = await resp.json();
+
+        if (!resp.ok || json.status === 'error') {
+          showError(json.error?.message || 'This invite link is invalid or expired.');
+          return;
+        }
+
+        const d = json.data;
+        document.getElementById('ownerName').textContent = d.owner_name;
+        document.getElementById('billTitle').textContent = d.title || 'Untitled Bill';
+        document.getElementById('merchant').textContent = d.merchant_name || '';
+
+        const rows = document.getElementById('detailRows');
+        addRow(rows, 'Total', `$${parseFloat(d.total).toFixed(2)}`);
+        addRow(rows, 'Members', d.member_count);
+        addRow(rows, 'Currency', d.currency);
+
+        const link = document.getElementById('deepLink');
+        link.href = d.deep_link;
+
+        // Try opening the app automatically
+        setTimeout(() => { window.location.href = d.deep_link; }, 300);
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('details').style.display = 'block';
+      } catch (e) {
+        showError('Unable to load invite. Please try again.');
+      }
+    }
+
+    function addRow(container, label, value) {
+      const row = document.createElement('div');
+      row.className = 'detail-row';
+      row.innerHTML = `<span class="label">${label}</span><span class="value">${value}</span>`;
+      container.appendChild(row);
+    }
+
+    function showError(msg) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error').style.display = 'block';
+      document.getElementById('error').textContent = msg;
+    }
+
+    loadInvite();
+  </script>
+</body>
+</html>

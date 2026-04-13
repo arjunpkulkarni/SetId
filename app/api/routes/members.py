@@ -8,9 +8,16 @@ from app.db.session import get_db
 from app.models.user import User
 from app.core.response import success_response, error_response
 from app.schemas.bill_member import MemberAdd, MemberUpdate, BillMemberOut, InviteLinkOut
-from app.services.bill_service import BillService
+from app.services.bill_service import BillService, _invite_url
 
 router = APIRouter(prefix="/bills/{bill_id}", tags=["Members"])
+
+
+def _member_out(member) -> dict:
+    out = BillMemberOut.model_validate(member).model_dump()
+    if member.invite_token:
+        out["invite_url"] = _invite_url(member.invite_token)
+    return out
 
 
 @router.post("/members", status_code=201)
@@ -42,7 +49,7 @@ def add_member(
         return error_response("BAD_REQUEST", str(e), 400)
 
     return success_response(
-        data=BillMemberOut.model_validate(member).model_dump(),
+        data=_member_out(member),
         message="Member added",
     )
 
@@ -65,7 +72,7 @@ def list_members(
 
     svc = BillService(db)
     members = svc.get_members(str(bill_id))
-    members_data = [BillMemberOut.model_validate(m).model_dump() for m in members]
+    members_data = [_member_out(m) for m in members]
     return success_response(data=members_data)
 
 
@@ -87,7 +94,7 @@ def update_member(
         return error_response("NOT_FOUND", "Member not found", 404)
 
     return success_response(
-        data=BillMemberOut.model_validate(member).model_dump(),
+        data=_member_out(member),
         message="Member updated",
     )
 
@@ -126,13 +133,9 @@ def create_invite_link(
 ):
     svc = BillService(db)
     try:
-        token, expires_at = svc.create_invite_token(str(bill_id))
+        token, url = svc.create_invite_token(str(bill_id))
     except ValueError:
         return error_response("NOT_FOUND", "Bill not found", 404)
 
-    invite_data = InviteLinkOut(
-        invite_url=f"http://localhost:3000/join/{token}",
-        token=token,
-        expires_at=expires_at,
-    )
+    invite_data = InviteLinkOut(invite_url=url, token=token)
     return success_response(data=invite_data.model_dump(), message="Invite link created")

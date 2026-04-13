@@ -22,6 +22,8 @@ class BillMemberOut(BaseModel):
     email: str | None = None
     nickname: str
     status: str
+    invite_token: str | None = None
+    invite_url: str | None = None
     invited_at: datetime
     joined_at: datetime | None = None
 
@@ -31,4 +33,3 @@ class BillMemberOut(BaseModel):
 class InviteLinkOut(BaseModel):
     invite_url: str
     token: str
-    expires_at: datetime

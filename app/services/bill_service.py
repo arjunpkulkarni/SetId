@@ -1,17 +1,21 @@
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.bill import Bill
 from app.models.bill_member import BillMember
 from app.models.user import User
 
 
-class BillService:
-    _invite_tokens: dict[str, dict] = {}
+def _invite_url(token: str) -> str:
+    base = settings.PUBLIC_PAYMENT_BASE_URL.rstrip("/")
+    return f"{base}/invite/{token}"
 
+
+class BillService:
     def __init__(self, db: Session):
         self.db = db
 
@@ -119,12 +123,14 @@ class BillService:
         if not nickname:
             nickname = "Guest"
 
+        token = secrets.token_urlsafe(32)
         member = BillMember(
             bill_id=bill_id,
             user_id=user_id,
             email=email,
             nickname=nickname,
             status="invited",
+            invite_token=token,
         )
         self.db.add(member)
         self.db.commit()
@@ -159,35 +165,44 @@ class BillService:
         self.db.delete(member)
         self.db.commit()
 
-    def create_invite_token(self, bill_id: str) -> tuple[str, datetime]:
+    def create_invite_token(self, bill_id: str) -> tuple[str, str]:
+        """Create a shareable invite link for the bill. Returns (token, invite_url)."""
         bill = self.db.query(Bill).filter(Bill.id == bill_id).first()
         if not bill:
             raise ValueError(f"Bill {bill_id} not found")
 
         token = secrets.token_urlsafe(32)
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+        placeholder = BillMember(
+            bill_id=bill_id,
+            nickname="(invite link)",
+            status="invite_link",
+            invite_token=token,
+        )
+        self.db.add(placeholder)
+        self.db.commit()
 
-        BillService._invite_tokens[token] = {
-            "bill_id": str(bill_id),
-            "expires_at": expires_at,
-        }
+        return token, _invite_url(token)
 
-        return token, expires_at
+    def get_member_by_invite_token(self, token: str) -> BillMember | None:
+        return (
+            self.db.query(BillMember)
+            .filter(BillMember.invite_token == token)
+            .first()
+        )
 
     def join_by_token(self, token: str, user_id: str) -> BillMember:
-        token_data = BillService._invite_tokens.get(token)
-        if not token_data:
+        member = self.get_member_by_invite_token(token)
+        if not member:
             raise ValueError("Invalid invite token")
 
-        if datetime.now(timezone.utc) > token_data["expires_at"]:
-            del BillService._invite_tokens[token]
-            raise ValueError("Invite token has expired")
-
-        bill_id = token_data["bill_id"]
+        bill_id = str(member.bill_id)
 
         existing = (
             self.db.query(BillMember)
-            .filter(BillMember.bill_id == bill_id, BillMember.user_id == user_id)
+            .filter(
+                BillMember.bill_id == bill_id,
+                BillMember.user_id == user_id,
+            )
             .first()
         )
         if existing:
@@ -201,16 +216,24 @@ class BillService:
         user = self.db.query(User).filter(User.id == user_id).first()
         nickname = user.full_name if user else "Guest"
 
-        member = BillMember(
+        if member.status == "invite_link" and not member.user_id:
+            member.user_id = user_id
+            member.nickname = nickname
+            member.status = "joined"
+            member.joined_at = datetime.now(timezone.utc)
+            self.db.commit()
+            self.db.refresh(member)
+            return member
+
+        new_member = BillMember(
             bill_id=bill_id,
             user_id=user_id,
             nickname=nickname,
             status="joined",
+            invite_token=secrets.token_urlsafe(32),
             joined_at=datetime.now(timezone.utc),
         )
-        self.db.add(member)
+        self.db.add(new_member)
         self.db.commit()
-        self.db.refresh(member)
-
-        del BillService._invite_tokens[token]
-        return member
+        self.db.refresh(new_member)
+        return new_member

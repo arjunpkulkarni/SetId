@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "WealthSplit"
 
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/wealthsplit"
+    DIRECT_DATABASE_URL: str | None = None  # For migrations (bypasses connection pooling)
 
     JWT_SECRET_KEY: str = "dev-secret-change-me"
     JWT_ALGORITHM: str = "HS256"

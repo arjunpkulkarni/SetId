@@ -1,5 +1,4 @@
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -10,7 +9,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.core.response import success_response, error_response
 from app.schemas.bill_member import BillMemberOut, InviteLinkOut
-from app.services.bill_service import BillService
+from app.services.bill_service import BillService, _invite_url
 
 
 class JoinRequest(BaseModel):
@@ -28,15 +27,11 @@ def share_bill(
 ):
     svc = BillService(db)
     try:
-        token, expires_at = svc.create_invite_token(str(bill_id))
+        token, url = svc.create_invite_token(str(bill_id))
     except ValueError:
         return error_response("NOT_FOUND", "Bill not found", 404)
 
-    invite_data = InviteLinkOut(
-        invite_url=f"http://localhost:3000/join/{token}",
-        token=token,
-        expires_at=expires_at,
-    )
+    invite_data = InviteLinkOut(invite_url=url, token=token)
     return success_response(data=invite_data.model_dump(), message="Share link created")
 
 
@@ -53,8 +48,11 @@ def join_bill(
     except ValueError as e:
         return error_response("INVALID_TOKEN", str(e), 400)
 
+    out = BillMemberOut.model_validate(member).model_dump()
+    if member.invite_token:
+        out["invite_url"] = _invite_url(member.invite_token)
     return success_response(
-        data=BillMemberOut.model_validate(member).model_dump(),
+        data=out,
         message="Successfully joined the bill",
     )
 
@@ -64,23 +62,21 @@ def get_invite_info(
     token: str,
     db: Session = Depends(get_db),
 ):
-    token_data = BillService._invite_tokens.get(token)
-    if not token_data:
+    svc = BillService(db)
+    member = svc.get_member_by_invite_token(token)
+    if not member:
         return error_response("NOT_FOUND", "Invalid or expired invite token", 404)
 
-    if datetime.now(timezone.utc) > token_data["expires_at"]:
-        del BillService._invite_tokens[token]
-        return error_response("EXPIRED", "Invite token has expired", 410)
-
-    svc = BillService(db)
-    bill = svc.get_bill(token_data["bill_id"])
+    bill = member.bill
     if not bill:
         return error_response("NOT_FOUND", "Bill not found", 404)
 
+    owner = bill.owner
     return success_response(data={
         "bill_id": str(bill.id),
         "title": bill.title,
         "merchant_name": bill.merchant_name,
         "owner_id": str(bill.owner_id),
-        "expires_at": token_data["expires_at"].isoformat(),
+        "owner_name": owner.full_name if owner else None,
+        "invite_url": _invite_url(token),
     })
