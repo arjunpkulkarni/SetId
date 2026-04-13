@@ -25,6 +25,7 @@ from app.api.routes import (
     pay_public,
     internal_jobs,
     virtual_cards,
+    bill_ws,
 )
 from app.models import sms_log  # noqa: F401 — register SmsLog metadata
 
@@ -104,6 +105,7 @@ app.include_router(notifications.router)
 app.include_router(pay_public.router)
 app.include_router(internal_jobs.router)
 app.include_router(virtual_cards.router)
+app.include_router(bill_ws.router)
 
 
 @app.get("/health", tags=["health"])
