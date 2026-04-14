@@ -472,18 +472,28 @@ export default function BillSplitScreen({ navigation, route }) {
   const fetchSummary = useCallback(async () => {
     if (!billId) return;
     try {
-      const res = await billsApi.getSummary(billId);
-      const data = res.data;
+      const [summaryRes, assignRes] = await Promise.all([
+        billsApi.getSummary(billId),
+        assignmentsApi.list(billId),
+      ]);
+
+      const data = summaryRes.data;
       setMembers(data.members ?? []);
       applyServerItemState(data.bill, data.items ?? []);
 
+      // Build assignmentMap from the dedicated assignments endpoint
+      // so we pick up claims made through the party/web flow
+      const allAssignments = assignRes.data ?? [];
       const map = {};
       (data.items ?? []).forEach((item) => {
         map[item.id] = [];
       });
-      (data.bill?.assignments ?? []).forEach?.((a) => {
-        if (!map[a.receipt_item_id]) map[a.receipt_item_id] = [];
-        map[a.receipt_item_id].push(a.bill_member_id);
+      allAssignments.forEach((a) => {
+        const itemId = a.receipt_item_id;
+        if (!map[itemId]) map[itemId] = [];
+        if (!map[itemId].includes(a.bill_member_id)) {
+          map[itemId].push(a.bill_member_id);
+        }
       });
       setAssignmentMap(map);
     } catch {
