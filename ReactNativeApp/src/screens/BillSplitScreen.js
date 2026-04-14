@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,12 +12,14 @@ import {
   Share,
   Modal,
   Clipboard,
+  RefreshControl,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, shadows } from '../theme';
 import { bills as billsApi, assignments as assignmentsApi, receipts as receiptsApi, members as membersApi, paymentMethods as paymentMethodsApi } from '../services/api';
+import useBillWebSocket from '../hooks/useBillWebSocket';
 
 function formatCurrency(value) {
   const num = typeof value === 'string' ? parseFloat(value) : (value ?? 0);
@@ -424,6 +426,7 @@ export default function BillSplitScreen({ navigation, route }) {
   const [itemPrices, setItemPrices] = useState({});
   const [originalItemSnapshots, setOriginalItemSnapshots] = useState({});
   const [removedItemIds, setRemovedItemIds] = useState({});
+  const [refreshing, setRefreshing] = useState(false);
 
   const applyServerItemState = useCallback((nextBill, nextItems, preserveAssignments = false) => {
     setBill(nextBill);
@@ -490,7 +493,41 @@ export default function BillSplitScreen({ navigation, route }) {
 
   useEffect(() => {
     fetchSummary().finally(() => setLoading(false));
+
+    // Poll every 3s to pick up changes from other users
+    const poll = setInterval(() => fetchSummary(), 3000);
+    return () => clearInterval(poll);
   }, [fetchSummary, route?.params?.refresh]);
+
+  const handlePullToRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchSummary();
+    setRefreshing(false);
+  }, [fetchSummary]);
+
+  // ─── WebSocket: real-time updates ───────────────────────────────────────────
+  const wsHandlers = useMemo(() => ({
+    onConnected: () => {
+      console.log('[WS] Connected to bill', billId);
+    },
+    onAssignmentUpdate: (data) => {
+      console.log('[WS] assignment_update received', data?.length, 'assignments');
+      fetchSummary();
+    },
+    onMemberJoined: (data) => {
+      console.log('[WS] member_joined:', data?.nickname);
+      fetchSummary();
+    },
+    onPaymentComplete: (data) => {
+      console.log('[WS] payment_complete:', data?.nickname);
+      fetchSummary();
+    },
+    onAuthError: (code) => {
+      console.warn('[WS] Auth error, code:', code);
+    },
+  }), [billId, fetchSummary]);
+
+  useBillWebSocket(billId, wsHandlers);
 
   const handleToggleMember = (itemId, memberId) => {
     setAssignmentMap((prev) => {
@@ -845,6 +882,14 @@ export default function BillSplitScreen({ navigation, route }) {
           { paddingTop: insets.top + 72, paddingBottom: insets.bottom + 160 },
         ]}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handlePullToRefresh}
+            tintColor={colors.secondary}
+            colors={[colors.secondary]}
+          />
+        }
       >
         <MerchantHeader bill={bill} />
 

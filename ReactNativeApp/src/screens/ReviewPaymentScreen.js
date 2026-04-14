@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,11 +8,13 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, shadows } from '../theme';
 import { useAuth } from '../contexts/AuthContext';
+import useBillWebSocket from '../hooks/useBillWebSocket';
 import {
   bills as billsApi,
   assignments as assignmentsApi,
@@ -149,6 +151,7 @@ export default function ReviewPaymentScreen({ navigation, route }) {
   const [participants, setParticipants] = useState([]);
   const [hostShare, setHostShare] = useState(0);
   const [nudging, setNudging] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async (isBackgroundRefresh = false) => {
     if (!billId) return;
@@ -236,13 +239,43 @@ export default function ReviewPaymentScreen({ navigation, route }) {
   useEffect(() => {
     load();
 
-    // Poll for updates every 5 seconds while screen is active
-    const pollInterval = setInterval(() => {
-      load(true); // background refresh, won't show loading spinner
-    }, 5000);
-
-    return () => clearInterval(pollInterval);
+    // Poll every 3s to pick up payments and member changes
+    const poll = setInterval(() => load(true), 3000);
+    return () => clearInterval(poll);
   }, [load]);
+
+  const handlePullToRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load(true);
+    setRefreshing(false);
+  }, [load]);
+
+  // ─── WebSocket: real-time updates ───────────────────────────────────────────
+  const wsHandlers = useMemo(() => ({
+    onPaymentComplete: (data) => {
+      if (!data?.member_id) return;
+      setParticipants((prev) =>
+        prev.map((p) =>
+          String(p.id) === String(data.member_id)
+            ? { ...p, status: 'paid', subtitle: 'Paid via Settld' }
+            : p,
+        ),
+      );
+      // Also do a background refresh to get accurate amounts
+      load(true);
+    },
+    onMemberJoined: (data) => {
+      if (!data?.member_id) return;
+      // Background refresh to pick up the new member
+      load(true);
+    },
+    onAssignmentUpdate: () => {
+      // Assignments changed, refresh to recalculate amounts
+      load(true);
+    },
+  }), [load]);
+
+  useBillWebSocket(billId, wsHandlers);
 
   const totalBill = parseFloat(bill?.total ?? 0);
   // The host paid upfront — the amount to collect is the bill minus the host's share
@@ -342,6 +375,14 @@ export default function ReviewPaymentScreen({ navigation, route }) {
           { paddingTop: insets.top + 64, paddingBottom: insets.bottom + 40 },
         ]}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handlePullToRefresh}
+            tintColor={colors.secondary}
+            colors={[colors.secondary]}
+          />
+        }
       >
         {/* Bill header */}
         <View style={styles.billHeader}>
