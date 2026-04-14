@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models.bill import Bill
 from app.models.payment import Payment
 from app.models.virtual_card import VirtualCard
+from app.services.calculation_service import CalculationService
 
 logger = logging.getLogger(__name__)
 
@@ -20,27 +21,37 @@ class ReadinessService:
         if not bill:
             raise ValueError("NOT_FOUND")
 
-        bill_total = bill.total or Decimal("0")
+        # The host paid upfront, so we only need to collect from non-host members.
+        calc = CalculationService(self.db)
+        try:
+            breakdown = calc.get_balance_breakdown(bill_id)
+            amount_to_collect = sum(
+                (Decimal(str(m["total_owed"])) for m in breakdown["members"] if not m.get("is_host")),
+                Decimal("0"),
+            )
+        except ValueError:
+            amount_to_collect = bill.total or Decimal("0")
 
         total_collected = sum(
             (p.amount for p in self._succeeded_payments(bill_id)),
             Decimal("0"),
         )
 
-        if bill_total > 0:
+        if amount_to_collect > 0:
             collection_pct = (
-                (total_collected / bill_total) * Decimal("100")
+                (total_collected / amount_to_collect) * Decimal("100")
             ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         else:
-            collection_pct = Decimal("0")
+            collection_pct = Decimal("100") if (bill.total or Decimal("0")) > 0 else Decimal("0")
 
-        meets_threshold = total_collected >= bill_total and bill_total > 0
+        meets_threshold = total_collected >= amount_to_collect and amount_to_collect > 0
 
         return {
             "bill_id": str(bill.id),
             "ready_to_pay": bill.ready_to_pay,
             "total_collected": total_collected,
-            "bill_total": bill_total,
+            "amount_to_collect": amount_to_collect,
+            "bill_total": bill.total or Decimal("0"),
             "collection_pct": collection_pct,
             "meets_threshold": meets_threshold,
             "ready_reason": bill.ready_reason,

@@ -60,6 +60,7 @@ class ReadinessOut(BaseModel):
     bill_id: uuid.UUID
     ready_to_pay: bool
     total_collected: Decimal
+    amount_to_collect: Decimal
     bill_total: Decimal
     collection_pct: Decimal
     meets_threshold: bool

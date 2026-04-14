@@ -21,6 +21,7 @@ from app.api.routes import (
     receipts,
     assignments,
     payments,
+    payment_methods,
     dashboard,
     invites,
     invite_public,
@@ -102,6 +103,7 @@ app.include_router(members.router)
 app.include_router(receipts.router)
 app.include_router(assignments.router)
 app.include_router(payments.router)
+app.include_router(payment_methods.router)
 app.include_router(dashboard.router)
 app.include_router(invites.router)
 app.include_router(invite_public.router)

@@ -28,24 +28,50 @@ def _mock_payment(amount="50.00", status="succeeded"):
     return p
 
 
+def _mock_breakdown(members_owed, is_host_flags=None):
+    """Build a mock balance breakdown dict.
+    
+    members_owed: list of total_owed Decimal values for each member
+    is_host_flags: list of booleans (default: first member is host)
+    """
+    if is_host_flags is None:
+        is_host_flags = [True] + [False] * (len(members_owed) - 1)
+    members = []
+    for i, (owed, is_host) in enumerate(zip(members_owed, is_host_flags)):
+        members.append({
+            "member_id": f"member-{i}",
+            "nickname": f"Member {i}",
+            "is_host": is_host,
+            "total_owed": owed,
+        })
+    return {"members": members}
+
+
 class TestEvaluate:
-    def test_fully_collected(self):
+    @patch("app.services.readiness_service.CalculationService")
+    def test_fully_collected(self, MockCalcSvc):
         db = MagicMock()
         bill = _mock_bill(total="100.00")
         db.query.return_value.filter.return_value.first.return_value = bill
         db.query.return_value.filter.return_value.all.return_value = [
-            _mock_payment("60.00"),
             _mock_payment("40.00"),
+            _mock_payment("30.00"),
         ]
+
+        MockCalcSvc.return_value.get_balance_breakdown.return_value = _mock_breakdown(
+            [Decimal("0"), Decimal("40.00"), Decimal("30.00")]
+        )
 
         svc = ReadinessService(db)
         result = svc.evaluate("bill-1")
 
         assert result["meets_threshold"] is True
-        assert result["total_collected"] == Decimal("100.00")
+        assert result["total_collected"] == Decimal("70.00")
+        assert result["amount_to_collect"] == Decimal("70.00")
         assert result["collection_pct"] == Decimal("100.00")
 
-    def test_partially_collected(self):
+    @patch("app.services.readiness_service.CalculationService")
+    def test_partially_collected(self, MockCalcSvc):
         db = MagicMock()
         bill = _mock_bill(total="100.00")
         db.query.return_value.filter.return_value.first.return_value = bill
@@ -53,17 +79,24 @@ class TestEvaluate:
             _mock_payment("30.00"),
         ]
 
+        MockCalcSvc.return_value.get_balance_breakdown.return_value = _mock_breakdown(
+            [Decimal("0"), Decimal("70.00")]
+        )
+
         svc = ReadinessService(db)
         result = svc.evaluate("bill-1")
 
         assert result["meets_threshold"] is False
-        assert result["collection_pct"] == Decimal("30.00")
+        assert result["amount_to_collect"] == Decimal("70.00")
 
-    def test_zero_total_bill(self):
+    @patch("app.services.readiness_service.CalculationService")
+    def test_zero_total_bill(self, MockCalcSvc):
         db = MagicMock()
         bill = _mock_bill(total="0.00")
         db.query.return_value.filter.return_value.first.return_value = bill
         db.query.return_value.filter.return_value.all.return_value = []
+
+        MockCalcSvc.return_value.get_balance_breakdown.return_value = _mock_breakdown([Decimal("0")])
 
         svc = ReadinessService(db)
         result = svc.evaluate("bill-1")
@@ -80,13 +113,18 @@ class TestEvaluate:
 
 
 class TestMarkReady:
-    def test_fully_collected_marks_ready(self):
+    @patch("app.services.readiness_service.CalculationService")
+    def test_fully_collected_marks_ready(self, MockCalcSvc):
         db = MagicMock()
         bill = _mock_bill(total="100.00")
         db.query.return_value.filter.return_value.first.return_value = bill
         db.query.return_value.filter.return_value.all.return_value = [
-            _mock_payment("100.00"),
+            _mock_payment("70.00"),
         ]
+
+        MockCalcSvc.return_value.get_balance_breakdown.return_value = _mock_breakdown(
+            [Decimal("0"), Decimal("70.00")]
+        )
 
         svc = ReadinessService(db)
         result = svc.mark_ready("bill-1", "owner-1", reason="fully_collected")
@@ -95,13 +133,18 @@ class TestMarkReady:
         assert result.ready_reason == "fully_collected"
         assert result.status == "ready_to_pay"
 
-    def test_owner_override_bypasses_threshold(self):
+    @patch("app.services.readiness_service.CalculationService")
+    def test_owner_override_bypasses_threshold(self, MockCalcSvc):
         db = MagicMock()
         bill = _mock_bill(total="100.00")
         db.query.return_value.filter.return_value.first.return_value = bill
         db.query.return_value.filter.return_value.all.return_value = [
             _mock_payment("20.00"),
         ]
+
+        MockCalcSvc.return_value.get_balance_breakdown.return_value = _mock_breakdown(
+            [Decimal("0"), Decimal("70.00")]
+        )
 
         svc = ReadinessService(db)
         result = svc.mark_ready("bill-1", "owner-1", reason="owner_override")
@@ -118,13 +161,18 @@ class TestMarkReady:
         with pytest.raises(ValueError, match="FORBIDDEN"):
             svc.mark_ready("bill-1", "not-owner", reason="fully_collected")
 
-    def test_threshold_not_met_rejects(self):
+    @patch("app.services.readiness_service.CalculationService")
+    def test_threshold_not_met_rejects(self, MockCalcSvc):
         db = MagicMock()
         bill = _mock_bill(total="100.00")
         db.query.return_value.filter.return_value.first.return_value = bill
         db.query.return_value.filter.return_value.all.return_value = [
-            _mock_payment("50.00"),
+            _mock_payment("30.00"),
         ]
+
+        MockCalcSvc.return_value.get_balance_breakdown.return_value = _mock_breakdown(
+            [Decimal("0"), Decimal("70.00")]
+        )
 
         svc = ReadinessService(db)
         with pytest.raises(ValueError, match="THRESHOLD_NOT_MET"):

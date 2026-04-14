@@ -185,12 +185,10 @@ def get_bill_summary(
     bill_subtotal = bill.subtotal or Decimal("0")
     total_unassigned = bill_subtotal - total_assigned
 
-    total_paid = sum(
-        (p.amount for p in payments if p.status == "succeeded"),
-        Decimal("0"),
-    )
-    bill_total = bill.total or Decimal("0")
-    total_remaining = bill_total - total_paid
+    # Use balance breakdown so host (paid upfront) is excluded from remaining
+    breakdown = calc_svc.get_balance_breakdown(str(bill_id))
+    total_paid = breakdown["total_paid"]
+    total_remaining = breakdown["total_remaining"]
 
     bill.member_count = len(bill.members) if bill.members else 0
 

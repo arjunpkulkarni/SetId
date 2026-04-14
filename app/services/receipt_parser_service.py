@@ -629,10 +629,10 @@ class ReceiptParserService:
             Decimal("0.00"),
         ).quantize(MONEY_QUANTIZE)
         bill.subtotal = subtotal
+        # Tip is already on the receipt, don't add it again
         bill.total = (
             subtotal
             + (bill.tax or Decimal("0.00"))
-            + (bill.tip or Decimal("0.00"))
             + (bill.service_fee or Decimal("0.00"))
         ).quantize(MONEY_QUANTIZE)
 

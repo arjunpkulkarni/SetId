@@ -57,6 +57,10 @@ class PaymentNotificationService:
         errors: list[str] = []
 
         for m in breakdown["members"]:
+            # Host paid upfront, skip them
+            if m.get("is_host"):
+                continue
+
             remaining = Decimal(str(m["remaining"]))
             if remaining <= 0:
                 continue

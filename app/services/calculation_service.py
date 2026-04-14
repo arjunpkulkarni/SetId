@@ -266,8 +266,9 @@ class CalculationService:
             bill.service_fee_percentage = percentage
 
         # Calculate and apply the fee
+        # Tip is already included in the receipt total, don't add it again
         bill.service_fee = self.calculate_service_fee(bill_id)
-        bill.total = bill.subtotal + bill.tax + bill.tip + bill.service_fee
+        bill.total = bill.subtotal + bill.tax + bill.service_fee
 
         self.db.commit()
         self.db.refresh(bill)
@@ -315,13 +316,18 @@ class CalculationService:
         bill = self.db.query(Bill).filter(Bill.id == bill_id).first()
         if bill:
             # Recalculate service fee based on current settings
+            # Tip is already included in the receipt total, don't add it again
             bill.service_fee = self.calculate_service_fee(bill_id)
-            bill.total = bill.subtotal + bill.tax + bill.tip + bill.service_fee
+            bill.total = bill.subtotal + bill.tax + bill.service_fee
 
         self.db.commit()
 
         total = bill.total if bill else Decimal("0")
         return {"items_recalculated": items_recalculated, "total": total}
+
+    def _is_bill_owner_member(self, member: BillMember, bill: Bill) -> bool:
+        """Check if a bill member is the bill owner (host who paid upfront)."""
+        return member.user_id is not None and str(member.user_id) == str(bill.owner_id)
 
     def get_balance_breakdown(self, bill_id: str) -> dict:
         bill = self.db.query(Bill).filter(Bill.id == bill_id).first()
@@ -337,11 +343,9 @@ class CalculationService:
         bill_subtotal = bill.subtotal or Decimal("0")
         bill_tax = bill.tax or Decimal("0")
         bill_tip = bill.tip or Decimal("0")
-        
-        # Auto-calculate service fee if not set (for backwards compatibility with old bills)
+
         bill_fee = bill.service_fee or Decimal("0")
         if bill_fee == Decimal("0") and bill_subtotal > 0:
-            # Calculate fee on-the-fly using defaults
             bill_fee = self.calculate_service_fee(bill_id)
 
         member_breakdowns = []
@@ -349,7 +353,8 @@ class CalculationService:
         total_remaining_all = Decimal("0")
 
         for member in members:
-            # Sum of assignment amounts for this member
+            is_host = self._is_bill_owner_member(member, bill)
+
             assignments = (
                 self.db.query(ItemAssignment)
                 .filter(ItemAssignment.bill_member_id == member.id)
@@ -359,12 +364,12 @@ class CalculationService:
                 (a.amount_owed for a in assignments), Decimal("0")
             )
 
-            # Proportional shares
             if bill_subtotal > 0:
                 proportion = subtotal / bill_subtotal
             else:
                 proportion = Decimal("0")
 
+            # Tip is already on the receipt, so distribute it proportionally
             tax_share = (proportion * bill_tax).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
@@ -375,9 +380,12 @@ class CalculationService:
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
 
-            total_owed = subtotal + tax_share + tip_share + fee_share
+            # Host paid upfront -- they owe nothing
+            if is_host:
+                total_owed = Decimal("0")
+            else:
+                total_owed = subtotal + tax_share + tip_share + fee_share
 
-            # Sum of succeeded payments
             succeeded_payments = (
                 self.db.query(Payment)
                 .filter(
@@ -390,7 +398,7 @@ class CalculationService:
                 (p.amount for p in succeeded_payments), Decimal("0")
             )
 
-            remaining = total_owed - total_paid
+            remaining = max(total_owed - total_paid, Decimal("0"))
 
             total_paid_all += total_paid
             total_remaining_all += remaining
@@ -399,6 +407,7 @@ class CalculationService:
                 {
                     "member_id": str(member.id),
                     "nickname": member.nickname,
+                    "is_host": is_host,
                     "subtotal": subtotal,
                     "tax_share": tax_share,
                     "tip_share": tip_share,
@@ -422,6 +431,7 @@ class CalculationService:
             {
                 "member_id": m["member_id"],
                 "nickname": m["nickname"],
+                "is_host": m["is_host"],
                 "total_owed": m["total_owed"],
                 "total_paid": m["total_paid"],
                 "balance": m["remaining"],

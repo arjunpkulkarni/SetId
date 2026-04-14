@@ -5,6 +5,7 @@ from app.models.receipt import ReceiptUpload
 from app.models.receipt_item import ReceiptItem
 from app.models.item_assignment import ItemAssignment
 from app.models.payment import Payment
+from app.models.payment_method import PaymentMethod
 from app.models.settlement import Settlement
 from app.models.notification import Notification
 from app.models.sms_log import SmsLog
@@ -18,6 +19,7 @@ __all__ = [
     "ReceiptItem",
     "ItemAssignment",
     "Payment",
+    "PaymentMethod",
     "Settlement",
     "Notification",
     "SmsLog",
