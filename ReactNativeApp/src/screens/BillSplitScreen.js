@@ -703,29 +703,28 @@ export default function BillSplitScreen({ navigation, route }) {
       const res = await membersApi.createInviteLink(billId);
       const token = res.data?.token || res.token;
       const billTitle = bill.title || bill.merchant_name || 'this bill';
-      
+
       if (!token) {
         Alert.alert('Error', 'Could not create invite code');
         return;
       }
 
-      // Create a deep link that opens the app and joins the bill
-      const inviteLink = `https://app.settld.live/join/${token}`;
-      const appDeepLink = `settld://join/${token}`;
+      // Use the live website URL for invite links
+      const inviteLink = `https://www.settld.live/join/${token}`;
 
-      // Show the code and link in an alert
+      // Show the link in an alert
       Alert.alert(
         'Invite Friends',
-        `Share this link or code:\n\n${inviteLink}\n\nCode: ${token}\n\nFriends can click the link or enter the code in SETTLD to join.`,
+        `Share this link:\n\n${inviteLink}`,
         [
           { text: 'Cancel', style: 'cancel' },
           {
             text: 'Share Link',
             onPress: async () => {
               await Share.share({
-                message: `Join me to settle ${billTitle}!\n\nClick here: ${inviteLink}\n\nOr download SETTLD and enter code: ${token}`,
-                title: `Settle ${billTitle} on SETTLD`,
-                url: inviteLink, // iOS will use this for iMessage, etc.
+                message: `Join me to split ${billTitle}!\n\n${inviteLink}`,
+                title: `Split ${billTitle} on Settld`,
+                url: inviteLink,
               });
             },
           },
