@@ -1,20 +1,42 @@
 import axios from 'axios';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { getToken, removeToken } from './authStorage';
 
-// Use your computer's local IP for physical devices/Expo Go
-// Android emulator uses 10.0.2.2 to reach host machine
-// iOS simulator can use localhost
-// Physical devices need your computer's LAN IP
-const DEV_BASE =
-  Platform.OS === 'android'
-    ? 'http://10.0.2.2:8000'  // Android emulator
-    : __DEV__ && Platform.OS === 'ios'
-      ? 'http://10.195.57.116:8000'  // iOS device/Expo - use your Mac's IP
-      : 'http://localhost:8000';  // iOS simulator
+// Prefer explicit API URL when provided (e.g. physical device/Expo Go):
+// EXPO_PUBLIC_API_URL=http://192.168.x.x:8000
+const EXPLICIT_BASE = (process.env.EXPO_PUBLIC_API_URL ?? '').trim();
 
-// export const BASE_URL = __DEV__ ? DEV_BASE : 'https://api.settld.live';
-export const BASE_URL = 'https://api.settld.live';
+function getExpoDevHostBase() {
+  if (!__DEV__) return null;
+  const hostUri =
+    Constants.expoConfig?.hostUri ??
+    Constants.manifest2?.extra?.expoGo?.debuggerHost ??
+    Constants.manifest?.debuggerHost ??
+    null;
+  if (!hostUri || typeof hostUri !== 'string') return null;
+  const host = hostUri.split(':')[0]?.trim();
+  if (!host) return null;
+  return `http://${host}:8000`;
+}
+
+// Default local development hosts:
+// - Android emulator -> 10.0.2.2 maps to host localhost
+// - iOS simulator -> localhost resolves to host machine
+const DEV_BASE =
+  EXPLICIT_BASE ||
+  getExpoDevHostBase() ||
+  (Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000');
+
+export const BASE_URL = __DEV__ ? DEV_BASE : 'https://api.settld.live';
+
+/** WebSocket origin derived from HTTP API base (no separate hardcoded host). */
+export function getWebSocketBaseUrl() {
+  const base = BASE_URL.replace(/\/$/, '');
+  if (base.startsWith('https://')) return base.replace('https://', 'wss://');
+  if (base.startsWith('http://')) return base.replace('http://', 'ws://');
+  return base;
+}
 
 function logAxiosFailure(error) {
   if (!__DEV__) return;
@@ -96,9 +118,8 @@ export function unwrap(body) {
   return body.data;
 }
 
-/** Phone OTP + email auth + profile (single object for imports). */
+/** Phone OTP (Twilio Verify) + backend JWT + profile APIs. */
 export const authApi = {
-  /** @param {'signup'|'login'|null|undefined} intent — null/undefined keeps legacy API behavior */
   sendOtp: (phone, intent) =>
     client.post('/auth/send-otp', {
       phone,
@@ -113,26 +134,13 @@ export const authApi = {
       ...(intent ? { intent } : {}),
     }),
 
-  signup: (email, password, fullName) =>
-    client.post('/auth/signup', { email, password, full_name: fullName }),
-
-  login: (email, password) =>
-    client.post('/auth/login', { email, password }),
-
-  appleSignIn: (identityToken, authorizationCode, userInfo) =>
-    client.post('/auth/apple', {
-      identity_token: identityToken,
-      authorization_code: authorizationCode,
-      user_info: userInfo,
-    }),
-
   getMe: () => client.get('/auth/me'),
+
+  createProfile: (fullName) =>
+    client.post('/auth/create-profile', { full_name: fullName }),
 
   logout: () => client.post('/auth/logout'),
 };
-
-/** Alias for older imports: `import { auth } from '../services/api'` */
-export const auth = authApi;
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 export const dashboard = {

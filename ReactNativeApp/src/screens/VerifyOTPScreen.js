@@ -36,7 +36,7 @@ function mapVerifyError(code, fallback) {
 
 export default function VerifyOTPScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const { completePhoneAuth } = useAuth();
+  const { completePhoneAuth, setPendingOnboardingName } = useAuth();
   const phone = route.params?.phone ?? '';
   const firstName = (route.params?.firstName ?? '').trim();
   const mode = route.params?.mode === 'login' ? 'login' : 'signup';
@@ -75,6 +75,9 @@ export default function VerifyOTPScreen({ navigation, route }) {
         mode === 'login' ? '' : firstName,
         otpIntent,
       );
+      if (mode === 'signup') {
+        setPendingOnboardingName(firstName);
+      }
     } catch (err) {
       const c = err instanceof ApiError ? err.code : 'ERROR';
       const msg = err instanceof ApiError ? err.message : String(err?.message ?? err);

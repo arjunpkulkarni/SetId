@@ -25,7 +25,7 @@ import PhoneAuthScreen from './src/screens/PhoneAuthScreen';
 import VerifyOTPScreen from './src/screens/VerifyOTPScreen';
 
 import PhoneLoginScreen from './src/screens/PhoneLoginScreen';
-import SignupScreen from './src/screens/SignupScreen';
+import OnboardingScreen from './src/screens/OnboardingScreen';
 import BillSplitScreen from './src/screens/BillSplitScreen';
 import ReviewPaymentScreen from './src/screens/ReviewPaymentScreen';
 import ActivityDetailScreen from './src/screens/ActivityDetailScreen';
@@ -38,6 +38,7 @@ import MainTabNavigator from './src/navigation/MainTabNavigator';
 
 const AuthStack = createNativeStackNavigator();
 const MainStack = createNativeStackNavigator();
+const OnboardingStack = createNativeStackNavigator();
 
 function AuthNavigator() {
   return (
@@ -49,11 +50,6 @@ function AuthNavigator() {
       <AuthStack.Screen
         name="Login"
         component={PhoneLoginScreen}
-        options={{ animation: 'slide_from_right' }}
-      />
-      <AuthStack.Screen
-        name="Signup"
-        component={SignupScreen}
         options={{ animation: 'slide_from_right' }}
       />
       <AuthStack.Screen
@@ -118,8 +114,16 @@ function MainNavigator() {
   );
 }
 
+function OnboardingNavigator() {
+  return (
+    <OnboardingStack.Navigator screenOptions={{ headerShown: false }}>
+      <OnboardingStack.Screen name="OnboardingMain" component={OnboardingScreen} />
+    </OnboardingStack.Navigator>
+  );
+}
+
 function RootNavigator() {
-  const { user, isLoading } = useAuth();
+  const { user, token, needsOnboarding, isLoading } = useAuth();
 
   if (isLoading) {
     return (
@@ -129,6 +133,8 @@ function RootNavigator() {
     );
   }
 
+  if (!token) return <AuthNavigator />;
+  if (needsOnboarding) return <OnboardingNavigator />;
   return user ? <MainNavigator /> : <AuthNavigator />;
 }
 

@@ -491,22 +491,22 @@ export default function BillSplitScreen({ navigation, route }) {
   // ─── WebSocket: real-time updates ───────────────────────────────────────────
   const wsHandlers = useMemo(() => ({
     onConnected: () => {
-      console.log('[WS] Connected to bill', billId);
+      if (__DEV__) console.log('[WS] Connected to bill', billId);
     },
     onAssignmentUpdate: (data) => {
-      console.log('[WS] assignment_update received', data?.length, 'assignments');
+      if (__DEV__) console.log('[WS] assignment_update received', data?.length, 'assignments');
       fetchSummary();
     },
     onMemberJoined: (data) => {
-      console.log('[WS] member_joined:', data?.nickname);
+      if (__DEV__) console.log('[WS] member_joined:', data?.nickname);
       fetchSummary();
     },
     onPaymentComplete: (data) => {
-      console.log('[WS] payment_complete:', data?.nickname);
+      if (__DEV__) console.log('[WS] payment_complete:', data?.nickname);
       fetchSummary();
     },
     onAuthError: (code) => {
-      console.warn('[WS] Auth error, code:', code);
+      if (__DEV__) console.warn('[WS] Auth error, code:', code);
     },
   }), [billId, fetchSummary]);
 
@@ -540,7 +540,7 @@ export default function BillSplitScreen({ navigation, route }) {
       // Refresh from server to get accurate IDs and recalculated amounts
       await fetchSummary(true);
     } catch (err) {
-      console.warn('Assignment toggle failed, reverting:', err);
+      if (__DEV__) console.warn('Assignment toggle failed, reverting:', err);
       // Revert optimistic update on failure
       setAssignmentMap((prev) => ({
         ...prev,
