@@ -493,8 +493,12 @@ export default function BillSplitScreen({ navigation, route }) {
       });
       serverAssignmentIds.current = idMap;
       setAssignmentMap(map);
-    } catch {
-      // keep whatever state we have
+    } catch (e) {
+      // A silent catch here was hiding bugs where the UI would stop updating
+      // after a WebSocket event because the follow-up HTTP GET threw. Surface
+      // it in dev so regressions are visible instead of manifesting as a
+      // mysterious "frontend not updating" symptom.
+      if (__DEV__) console.warn('[fetchSummary] failed', e);
     }
   }, [applyServerItemState, billId]);
 
@@ -519,10 +523,22 @@ export default function BillSplitScreen({ navigation, route }) {
     // actions; server events are authoritative.
     onAssignmentUpdate: (data) => {
       if (__DEV__) console.log('[WS] assignment_update received', data);
+      // The backend occasionally emits assignment_update with an empty
+      // payload (seen in production logs) so we can't rely on the payload
+      // itself — always re-fetch authoritative state.
       fetchSummary(true);
     },
     onMemberJoined: (data) => {
       if (__DEV__) console.log('[WS] member_joined:', data?.nickname ?? data);
+      // The server includes the full, updated members array in this event.
+      // Apply it immediately so the UI reflects the new joiner even if the
+      // follow-up HTTP fetch is slow, flaky, or fails outright (the root
+      // cause of the "Jane joined on web but doesn't appear on mobile for
+      // 2 minutes" symptom).
+      const incoming = Array.isArray(data?.members) ? data.members : null;
+      if (incoming) {
+        setMembers(incoming);
+      }
       fetchSummary(true);
     },
     onPaymentComplete: (data) => {
@@ -746,6 +762,23 @@ export default function BillSplitScreen({ navigation, route }) {
     const updates = [];
     const deletes = [];
 
+    // Expand one logical line (name + qty + total) into N quantity=1 creates
+    // so each unit gets its own assignable row. Cent-remainders are shifted
+    // to the first rows so the sum still matches the original line total.
+    const pushSplitCreates = (name, qty, totalPriceStr) => {
+      const totalCents = Math.round(parsePriceValue(totalPriceStr) * 100);
+      const baseCents = Math.floor(totalCents / qty);
+      const remainder = totalCents - baseCents * qty;
+      for (let i = 0; i < qty; i++) {
+        const cents = baseCents + (i < remainder ? 1 : 0);
+        creates.push({
+          name,
+          quantity: 1,
+          total_price: (cents / 100).toFixed(2),
+        });
+      }
+    };
+
     for (const item of items) {
       const current = getCurrentItemDraft(item);
       const isRemoved = removedItemIds[item.id] || current.quantity <= 0;
@@ -769,11 +802,15 @@ export default function BillSplitScreen({ navigation, route }) {
       }
 
       if (isDraft) {
-        creates.push({
-          name: current.name,
-          quantity: current.quantity,
-          total_price: current.totalPrice,
-        });
+        if (current.quantity > 1) {
+          pushSplitCreates(current.name, current.quantity, current.totalPrice);
+        } else {
+          creates.push({
+            name: current.name,
+            quantity: 1,
+            total_price: current.totalPrice,
+          });
+        }
         continue;
       }
 
@@ -783,11 +820,16 @@ export default function BillSplitScreen({ navigation, route }) {
         || current.quantity !== original.quantity
         || current.totalPrice !== original.totalPrice;
 
-      if (hasChanged) {
+      if (!hasChanged) continue;
+
+      if (current.quantity > 1) {
+        deletes.push(current.id);
+        pushSplitCreates(current.name, current.quantity, current.totalPrice);
+      } else {
         updates.push({
           id: current.id,
           name: current.name,
-          quantity: current.quantity,
+          quantity: 1,
           total_price: current.totalPrice,
         });
       }

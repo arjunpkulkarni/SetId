@@ -103,6 +103,13 @@ export default function useBillWebSocket(billId, handlers = {}) {
               break;
             case 'pong':
               break;
+            case 'ping':
+              // Server-originated heartbeat. Mirror it back so the peer's
+              // liveness check stays happy, and do NOT log as "unknown".
+              try {
+                socket.send(JSON.stringify({ type: 'pong' }));
+              } catch {}
+              break;
             default:
               if (__DEV__) {
                 console.log(`[WS] unknown event type: ${eventType}`);

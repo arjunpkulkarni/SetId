@@ -130,7 +130,81 @@ export default function ScanReceiptScreen({ navigation, route }) {
 
         const parseRes = await receipts.parse(billId);
         clearTimeout(cleanupStatusTimer);
-        setParsedData(parseRes.data);
+
+        // Expand any multi-quantity lines into individual quantity=1 rows so
+        // each unit can be assigned to a different member. "2 Chicken
+        // Sandwich @ $20" becomes two separate "1 Chicken Sandwich @ $10"
+        // rows. We distribute any cent-remainder across the first rows so
+        // the sum still matches the original line total exactly.
+        //
+        // The parse response's items are the OCR output and do NOT carry the
+        // persisted DB ids we need for `deletes`. Pull the stored rows from
+        // listItems, which returns the actual receipt_item records.
+        let itemsRes;
+        try {
+          itemsRes = await receipts.listItems(billId);
+        } catch (listErr) {
+          if (__DEV__) console.warn('[SCAN] listItems failed after parse', listErr);
+        }
+        const storedItems = Array.isArray(itemsRes?.data)
+          ? itemsRes.data
+          : Array.isArray(itemsRes?.data?.items)
+            ? itemsRes.data.items
+            : [];
+
+        const needsExpansion = storedItems.some(
+          (it) => it?.id && Math.floor(Number(it.quantity ?? 1)) > 1,
+        );
+
+        if (needsExpansion) {
+          setStatusText('Splitting items by unit…');
+
+          const deletes = [];
+          const creates = [];
+
+          for (const it of storedItems) {
+            const qty = Math.max(1, Math.floor(Number(it.quantity ?? 1)));
+            if (!it?.id || qty <= 1) continue;
+
+            deletes.push(it.id);
+
+            const totalCents = Math.round(parseFloat(it.total_price ?? 0) * 100);
+            const baseCents = Math.floor(totalCents / qty);
+            const remainder = totalCents - baseCents * qty;
+
+            for (let i = 0; i < qty; i++) {
+              const cents = baseCents + (i < remainder ? 1 : 0);
+              creates.push({
+                name: it.name,
+                quantity: 1,
+                total_price: (cents / 100).toFixed(2),
+              });
+            }
+          }
+
+          if (creates.length > 0 && deletes.length > 0) {
+            try {
+              const syncRes = await receipts.syncItems(billId, {
+                creates,
+                updates: [],
+                deletes,
+              });
+              const syncedItems = syncRes?.data?.items ?? [];
+              setParsedData({
+                ...parseRes.data,
+                items: syncedItems.length > 0 ? syncedItems : parseRes.data?.items,
+              });
+            } catch (syncErr) {
+              if (__DEV__) console.warn('[SCAN] expansion sync failed', syncErr);
+              setParsedData(parseRes.data);
+            }
+          } else {
+            setParsedData(parseRes.data);
+          }
+        } else {
+          setParsedData(parseRes.data);
+        }
+
         setParsing(false);
         setStatusText('Receipt parsed!');
 
