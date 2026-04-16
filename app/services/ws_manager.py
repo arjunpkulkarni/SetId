@@ -33,8 +33,15 @@ class BillWSManager:
 
     async def broadcast(self, bill_id: str, event: str, data: list | dict):
         payload = json.dumps({"type": event, "data": data})
+        clients = self._connections.get(bill_id, set())
+        logger.info(
+            "ws_broadcast bill=%s event=%s clients=%d",
+            bill_id,
+            event,
+            len(clients),
+        )
         dead: list[WebSocket] = []
-        for ws in self._connections.get(bill_id, set()):
+        for ws in clients:
             try:
                 await ws.send_text(payload)
             except Exception:

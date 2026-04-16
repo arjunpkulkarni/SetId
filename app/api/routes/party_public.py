@@ -135,8 +135,6 @@ async def _broadcast_assignments(bill_id: str) -> None:
 
 
 async def _broadcast_event(bill_id: str, event: str, data: dict) -> None:
-    if bill_ws_manager.client_count(bill_id) == 0:
-        return
     try:
         await bill_ws_manager.broadcast(bill_id, event, data)
     except Exception:
@@ -196,13 +194,22 @@ def join_party(
     db.refresh(member)
 
     members = db.query(BillMember).filter(BillMember.bill_id == bill.id).all()
+    members_payload = [
+        {"id": str(m.id), "nickname": m.nickname, "status": m.status}
+        for m in members
+    ]
 
     background_tasks.add_task(
         _broadcast_event,
         str(bill.id),
         "member_joined",
-        {"member_id": str(member.id), "nickname": member.nickname},
+        {
+            "member_id": str(member.id),
+            "nickname": member.nickname,
+            "members": members_payload,
+        },
     )
+    background_tasks.add_task(_broadcast_assignments, str(bill.id))
 
     return success_response(data={
         "member_id": str(member.id),
