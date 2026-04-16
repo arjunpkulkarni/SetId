@@ -245,10 +245,6 @@ export default function ReviewPaymentScreen({ navigation, route }) {
 
   useEffect(() => {
     load();
-
-    // Poll every 3s to pick up payments and member changes
-    const poll = setInterval(() => load(true), 3000);
-    return () => clearInterval(poll);
   }, [load]);
 
   const handlePullToRefresh = useCallback(async () => {
@@ -259,30 +255,37 @@ export default function ReviewPaymentScreen({ navigation, route }) {
 
   // ─── WebSocket: real-time updates ───────────────────────────────────────────
   const wsHandlers = useMemo(() => ({
-    onPaymentComplete: (data) => {
-      if (!data?.member_id) return;
-      setParticipants((prev) =>
-        prev.map((p) =>
-          String(p.id) === String(data.member_id)
-            ? { ...p, status: 'paid', subtitle: 'Paid via Settld' }
-            : p,
-        ),
-      );
-      // Also do a background refresh to get accurate amounts
+    onConnected: () => {
       load(true);
     },
-    onMemberJoined: (data) => {
-      if (!data?.member_id) return;
-      // Background refresh to pick up the new member
+    onPaymentComplete: (data) => {
+      if (data?.member_id) {
+        setParticipants((prev) =>
+          prev.map((p) =>
+            String(p.id) === String(data.member_id)
+              ? { ...p, status: 'paid', subtitle: 'Paid via Settld' }
+              : p,
+          ),
+        );
+      }
+      load(true);
+    },
+    onMemberJoined: () => {
       load(true);
     },
     onAssignmentUpdate: () => {
-      // Assignments changed, refresh to recalculate amounts
       load(true);
     },
   }), [load]);
 
-  useBillWebSocket(billId, wsHandlers);
+  const { connected: wsConnected } = useBillWebSocket(billId, wsHandlers);
+
+  // Fallback polling only when WebSocket is disconnected
+  useEffect(() => {
+    if (wsConnected) return;
+    const poll = setInterval(() => load(true), 5000);
+    return () => clearInterval(poll);
+  }, [wsConnected, load]);
 
   const totalBill = parseFloat(bill?.total ?? 0);
   // The host paid upfront — the amount to collect is the bill minus the host's share

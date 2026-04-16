@@ -31,7 +31,7 @@ export default function AddPaymentMethodScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { confirmSetupIntent } = useStripe();
   const { isPlatformPaySupported, confirmPlatformPaySetupIntent } = usePlatformPay();
-  const onSuccess = route?.params?.onSuccess;
+  const returnBillId = route?.params?.billId;
 
   const [cardComplete, setCardComplete] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -44,11 +44,19 @@ export default function AddPaymentMethodScreen({ navigation, route }) {
     })();
   }, [isPlatformPaySupported]);
 
+  const onAddSuccess = () => {
+    if (returnBillId) {
+      navigation.replace('ReviewPayment', { billId: returnBillId });
+    } else {
+      navigation.goBack();
+    }
+  };
+
   const handleApplePay = async () => {
     setProcessing(true);
     try {
       const setupRes = await paymentMethodsApi.createSetupIntent();
-      const clientSecret = setupRes.data.client_secret;
+      const clientSecret = setupRes?.data?.client_secret ?? setupRes?.client_secret;
 
       if (!clientSecret) throw new Error('No client secret returned from server');
 
@@ -75,12 +83,12 @@ export default function AddPaymentMethodScreen({ navigation, route }) {
       const paymentMethodId = setupIntent.paymentMethodId;
       await paymentMethodsApi.attachPaymentMethod(paymentMethodId);
 
-      Alert.alert('Success', 'Apple Pay added successfully!');
-      if (onSuccess) onSuccess();
-      navigation.goBack();
+      Alert.alert('Success', 'Apple Pay added successfully!', [
+        { text: 'OK', onPress: onAddSuccess },
+      ]);
     } catch (err) {
       console.error('[AddPaymentMethod] Apple Pay error:', err);
-      Alert.alert('Error', err?.error?.message || 'Failed to set up Apple Pay');
+      Alert.alert('Error', err?.message || 'Failed to set up Apple Pay');
     } finally {
       setProcessing(false);
     }
@@ -95,7 +103,7 @@ export default function AddPaymentMethodScreen({ navigation, route }) {
     setProcessing(true);
     try {
       const setupRes = await paymentMethodsApi.createSetupIntent();
-      const clientSecret = setupRes.data.client_secret;
+      const clientSecret = setupRes?.data?.client_secret ?? setupRes?.client_secret;
 
       if (!clientSecret) throw new Error('No client secret returned from server');
 
@@ -109,7 +117,7 @@ export default function AddPaymentMethodScreen({ navigation, route }) {
         return;
       }
 
-      if (setupIntent.status !== 'Succeeded') {
+      if (setupIntent?.status !== 'Succeeded') {
         Alert.alert('Setup failed', 'Unable to verify your card. Please try again.');
         setProcessing(false);
         return;
@@ -118,12 +126,12 @@ export default function AddPaymentMethodScreen({ navigation, route }) {
       const paymentMethodId = setupIntent.paymentMethodId;
       await paymentMethodsApi.attachPaymentMethod(paymentMethodId);
 
-      Alert.alert('Success', 'Payment method added successfully!');
-      if (onSuccess) onSuccess();
-      navigation.goBack();
+      Alert.alert('Success', 'Payment method added successfully!', [
+        { text: 'OK', onPress: onAddSuccess },
+      ]);
     } catch (err) {
       console.error('[AddPaymentMethod] error:', err);
-      Alert.alert('Error', err?.error?.message || 'Failed to add payment method');
+      Alert.alert('Error', err?.message || 'Failed to add payment method');
     } finally {
       setProcessing(false);
     }

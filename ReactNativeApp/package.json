@@ -25,6 +25,7 @@
     "expo-linear-gradient": "~15.0.8",
     "expo-secure-store": "^55.0.13",
     "expo-status-bar": "~3.0.9",
+    "expo-updates": "~29.0.16",
     "libphonenumber-js": "^1.12.33",
     "react": "19.1.0",
     "react-native": "0.81.5",

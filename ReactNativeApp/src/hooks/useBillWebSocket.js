@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { AppState } from 'react-native';
 import { getToken } from '../services/authStorage';
 import { getWebSocketBaseUrl } from '../services/api';
@@ -11,18 +11,30 @@ export default function useBillWebSocket(billId, handlers = {}) {
   const reconnectTimer = useRef(null);
   const isMounted = useRef(true);
   const pingTimer = useRef(null);
+  const [connected, setConnected] = useState(false);
+
+  const handlersRef = useRef(handlers);
+  useEffect(() => {
+    handlersRef.current = handlers;
+  });
 
   const connect = useCallback(async () => {
     if (!billId || !isMounted.current) return;
 
     try {
       const token = await getToken();
-      if (!token || !isMounted.current) return;
-
-      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      if (!token || !isMounted.current) {
+        console.warn(`[WS] No token available for bill ${billId}`);
         return;
       }
 
+      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+        console.log(`[WS] Already connected to bill ${billId}`);
+        return;
+      }
+
+      const url = `${WS_BASE}/bills/${billId}/ws?token=${token}`;
+      console.log(`[WS] Connecting to: ${url.replace(/token=[^&]*/, 'token=***')}`);
       const wsBase = getWebSocketBaseUrl();
       const url = `${wsBase}/bills/${billId}/ws?token=${encodeURIComponent(token)}`;
       const socket = new WebSocket(url);
@@ -32,10 +44,11 @@ export default function useBillWebSocket(billId, handlers = {}) {
           socket.close();
           return;
         }
+        console.log(`[WS] Socket opened successfully for bill ${billId}`);
         reconnectAttempt.current = 0;
-        handlers.onConnected?.();
+        setConnected(true);
+        handlersRef.current.onConnected?.();
 
-        // Keep-alive ping every 30s
         clearInterval(pingTimer.current);
         pingTimer.current = setInterval(() => {
           if (socket.readyState === WebSocket.OPEN) {
@@ -51,13 +64,13 @@ export default function useBillWebSocket(billId, handlers = {}) {
 
           switch (eventType) {
             case 'assignment_update':
-              handlers.onAssignmentUpdate?.(data);
+              handlersRef.current.onAssignmentUpdate?.(data);
               break;
             case 'member_joined':
-              handlers.onMemberJoined?.(data);
+              handlersRef.current.onMemberJoined?.(data);
               break;
             case 'payment_complete':
-              handlers.onPaymentComplete?.(data);
+              handlersRef.current.onPaymentComplete?.(data);
               break;
             default:
               break;
@@ -67,22 +80,25 @@ export default function useBillWebSocket(billId, handlers = {}) {
         }
       };
 
-      socket.onerror = () => {
-        // onclose will fire after this, which handles reconnect
+      socket.onerror = (error) => {
+        console.warn(`[WS] Socket error for bill ${billId}:`, error);
       };
 
       socket.onclose = (e) => {
+        console.log(`[WS] Socket closed for bill ${billId}, code: ${e.code}, reason: ${e.reason}`);
         clearInterval(pingTimer.current);
         ws.current = null;
+        setConnected(false);
 
         if (!isMounted.current) return;
 
-        // Don't reconnect on auth errors
         if (e.code === 4001 || e.code === 4003) {
-          handlers.onAuthError?.(e.code);
+          console.warn(`[WS] Auth error, not reconnecting. Code: ${e.code}`);
+          handlersRef.current.onAuthError?.(e.code);
           return;
         }
 
+        console.log(`[WS] Will attempt to reconnect...`);
         scheduleReconnect();
       };
 
@@ -109,7 +125,6 @@ export default function useBillWebSocket(billId, handlers = {}) {
     }, delay);
   }, [connect]);
 
-  // Reconnect when app comes back to foreground
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active' && isMounted.current) {
@@ -123,7 +138,6 @@ export default function useBillWebSocket(billId, handlers = {}) {
     return () => sub.remove();
   }, [connect]);
 
-  // Main connect / disconnect lifecycle
   useEffect(() => {
     isMounted.current = true;
     connect();
@@ -139,5 +153,5 @@ export default function useBillWebSocket(billId, handlers = {}) {
     };
   }, [connect]);
 
-  return ws;
+  return { ws, connected };
 }

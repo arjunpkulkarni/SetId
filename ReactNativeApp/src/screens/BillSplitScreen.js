@@ -383,9 +383,12 @@ export default function BillSplitScreen({ navigation, route }) {
   const [items, setItems] = useState([]);
   const [assignmentMap, setAssignmentMap] = useState({});
   const [serverAssignments, setServerAssignments] = useState([]);
-  // Maps "itemId::memberId" → server assignment id for deletion
+  // Maps "itemId::memberId" → array of server assignment ids (handles duplicates).
   const serverAssignmentIds = useRef({});
-  const mutatingAssignment = useRef(false);
+  // Per-key promise chain so clicks on the same chip serialize without dropping.
+  const mutationQueueRef = useRef({});
+  // Tracks in-flight mutation count so fetchSummary can back off until settled.
+  const inFlightMutationsRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingItemEdits, setSavingItemEdits] = useState(false);
@@ -439,14 +442,29 @@ export default function BillSplitScreen({ navigation, route }) {
     }
   }, []);
 
+  const lastFetchTime = useRef(0);
+  const FETCH_DEBOUNCE_MS = 1000;
+
   const fetchSummary = useCallback(async (force = false) => {
     if (!billId) return;
-    if (!force && mutatingAssignment.current) return;
+    // While a mutation is in flight, the server is mid-update. Fetching would
+    // pull a transient state that clobbers the optimistic UI and causes flicker.
+    if (!force && inFlightMutationsRef.current > 0) return;
+
+    const now = Date.now();
+    const timeSinceLastFetch = now - lastFetchTime.current;
+    if (!force && timeSinceLastFetch < FETCH_DEBOUNCE_MS) return;
+
+    lastFetchTime.current = now;
+
     try {
       const [summaryRes, assignRes] = await Promise.all([
         billsApi.getSummary(billId),
         assignmentsApi.list(billId),
       ]);
+
+      // Another mutation started while we were fetching — discard this snapshot.
+      if (inFlightMutationsRef.current > 0) return;
 
       const data = summaryRes.data;
       setMembers(data.members ?? []);
@@ -465,7 +483,9 @@ export default function BillSplitScreen({ navigation, route }) {
         if (!map[itemId].includes(a.bill_member_id)) {
           map[itemId].push(a.bill_member_id);
         }
-        idMap[`${itemId}::${a.bill_member_id}`] = a.id;
+        const key = `${itemId}::${a.bill_member_id}`;
+        if (!idMap[key]) idMap[key] = [];
+        idMap[key].push(a.id);
       });
       serverAssignmentIds.current = idMap;
       setAssignmentMap(map);
@@ -476,10 +496,6 @@ export default function BillSplitScreen({ navigation, route }) {
 
   useEffect(() => {
     fetchSummary().finally(() => setLoading(false));
-
-    // Poll every 3s to pick up changes from other users
-    const poll = setInterval(() => fetchSummary(), 3000);
-    return () => clearInterval(poll);
   }, [fetchSummary, route?.params?.refresh]);
 
   const handlePullToRefresh = useCallback(async () => {
@@ -491,6 +507,19 @@ export default function BillSplitScreen({ navigation, route }) {
   // ─── WebSocket: real-time updates ───────────────────────────────────────────
   const wsHandlers = useMemo(() => ({
     onConnected: () => {
+      console.log('[WS] Connected to bill', billId);
+      fetchSummary(true);
+    },
+    onAssignmentUpdate: () => {
+      console.log('[WS] Assignment update received, fetching...');
+      fetchSummary();
+    },
+    onMemberJoined: () => {
+      console.log('[WS] Member joined, fetching...');
+      fetchSummary();
+    },
+    onPaymentComplete: () => {
+      console.log('[WS] Payment complete, fetching...');
       if (__DEV__) console.log('[WS] Connected to bill', billId);
     },
     onAssignmentUpdate: (data) => {
@@ -510,20 +539,24 @@ export default function BillSplitScreen({ navigation, route }) {
     },
   }), [billId, fetchSummary]);
 
-  useBillWebSocket(billId, wsHandlers);
+  const { connected: wsConnected } = useBillWebSocket(billId, wsHandlers);
 
-  const handleToggleMember = async (itemId, memberId) => {
-    const current = assignmentMap[itemId] || [];
-    const has = current.includes(memberId);
+  // Fallback polling only when WebSocket is disconnected
+  useEffect(() => {
+    if (wsConnected) return;
+    const poll = setInterval(() => fetchSummary(), 5000);
+    return () => clearInterval(poll);
+  }, [wsConnected, fetchSummary]);
 
-    // Optimistic local update
-    setAssignmentMap((prev) => ({
-      ...prev,
-      [itemId]: has
-        ? (prev[itemId] || []).filter((id) => id !== memberId)
-        : [...(prev[itemId] || []), memberId],
-    }));
+  const handleToggleMember = (itemId, memberId) => {
+    const key = `${itemId}::${memberId}`;
+    const currentList = assignmentMap[itemId] || [];
+    const has = currentList.includes(memberId);
 
+    // Optimistic UI update — applied immediately so the tap always feels responsive.
+    setAssignmentMap((prev) => {
+      const list = prev[itemId] || [];
+      return {
     mutatingAssignment.current = true;
     try {
       if (has) {
@@ -545,12 +578,68 @@ export default function BillSplitScreen({ navigation, route }) {
       setAssignmentMap((prev) => ({
         ...prev,
         [itemId]: has
-          ? [...(prev[itemId] || []), memberId]
-          : (prev[itemId] || []).filter((id) => id !== memberId),
-      }));
-    } finally {
-      mutatingAssignment.current = false;
-    }
+          ? list.filter((id) => id !== memberId)
+          : list.includes(memberId) ? list : [...list, memberId],
+      };
+    });
+
+    inFlightMutationsRef.current += 1;
+
+    // Serialize all mutations for the same (item, member) so rapid taps don't race.
+    const prevPromise = mutationQueueRef.current[key] || Promise.resolve();
+    const nextPromise = prevPromise.then(async () => {
+      try {
+        if (has) {
+          // Remove every server assignment for this pair (the backend can contain
+          // duplicates from prior races; cleaning them up here prevents flicker).
+          const ids = serverAssignmentIds.current[key] || [];
+          if (ids.length > 0) {
+            await Promise.all(
+              ids.map((id) => assignmentsApi.delete(billId, id).catch(() => null)),
+            );
+          }
+          serverAssignmentIds.current[key] = [];
+        } else {
+          const res = await assignmentsApi.create(billId, [
+            { receipt_item_id: itemId, bill_member_id: memberId, share_type: 'equal', share_value: 0 },
+          ]);
+          const payload = res?.data ?? res;
+          const createdList = Array.isArray(payload) ? payload : [payload];
+          const newIds = createdList
+            .filter(Boolean)
+            .map((a) => a?.id)
+            .filter(Boolean);
+          // Record the new ids immediately so the very next tap can delete them
+          // without waiting for a fetchSummary round trip.
+          serverAssignmentIds.current[key] = [
+            ...(serverAssignmentIds.current[key] || []),
+            ...newIds,
+          ];
+        }
+      } catch (err) {
+        console.warn('[TOGGLE] mutation failed, reverting', err);
+        setAssignmentMap((prev) => {
+          const list = prev[itemId] || [];
+          return {
+            ...prev,
+            [itemId]: has
+              ? list.includes(memberId) ? list : [...list, memberId]
+              : list.filter((id) => id !== memberId),
+          };
+        });
+      }
+    });
+
+    mutationQueueRef.current[key] = nextPromise.catch(() => {});
+
+    nextPromise.finally(() => {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      // Only reconcile with the server once the queue is fully settled so we
+      // don't overwrite an optimistic state that a follow-up tap just applied.
+      if (inFlightMutationsRef.current === 0) {
+        fetchSummary(true);
+      }
+    });
   };
 
 
@@ -812,9 +901,7 @@ export default function BillSplitScreen({ navigation, route }) {
             {
               text: 'Add Card',
               onPress: () => {
-                navigation.navigate('AddPaymentMethod', {
-                  onSuccess: () => handleSend(),
-                });
+                navigation.navigate('AddPaymentMethod', { billId });
               },
             },
           ],
