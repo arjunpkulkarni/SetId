@@ -245,17 +245,20 @@ export const members = {
 
 // ─── Receipts ────────────────────────────────────────────────────────────────
 export const receipts = {
-  upload: (billId, file) => {
+  upload: (billId, file, options = {}) => {
+    const { append = false } = options;
     const form = new FormData();
     form.append('file', file);
     return client.post(`/bills/${billId}/receipt/upload`, form, {
+      params: { append },
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
 
   get: (billId) => client.get(`/bills/${billId}/receipt`),
 
-  parse: (billId) => client.post(`/bills/${billId}/receipt/parse`),
+  parse: (billId) =>
+    client.post(`/bills/${billId}/receipt/parse`, null, { params: { sync: true } }),
 
   listItems: (billId) => client.get(`/bills/${billId}/receipt/items`),
 

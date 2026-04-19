@@ -9,6 +9,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  ScrollView,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -97,6 +98,7 @@ export default function ScanReceiptScreen({ navigation, route }) {
   const [capturing, setCapturing] = useState(false);
   const [statusText, setStatusText] = useState('Line up the receipt, then tap Capture');
   const [parsedData, setParsedData] = useState(null);
+  const [queuedImages, setQueuedImages] = useState([]);
 
   useEffect(() => {
     if (!permission || permission.granted || autoRequestedPermission.current) return;
@@ -105,122 +107,146 @@ export default function ScanReceiptScreen({ navigation, route }) {
     requestPermission();
   }, [permission, requestPermission]);
 
-  const processReceiptUri = useCallback(
-    async (uri, mimeType = 'image/jpeg', fileName = 'receipt.jpg') => {
-      let cleanupStatusTimer;
+  useEffect(() => {
+    if (parsedData || uploading || parsing) return;
+    if (!queuedImages.length) {
+      setStatusText('Line up the receipt, then tap Capture');
+      return;
+    }
+    if (queuedImages.length === 1) {
+      setStatusText('1 page added. Capture another or process now.');
+      return;
+    }
+    setStatusText(`${queuedImages.length} pages added. Ready to process.`);
+  }, [parsedData, parsing, queuedImages.length, uploading]);
 
+  const enqueueReceiptImage = useCallback((uri, mimeType = 'image/jpeg', fileName = 'receipt.jpg') => {
+    const ext = mimeType === 'image/png' ? 'png' : 'jpg';
+    const normalizedName = fileName || `receipt-page-${Date.now()}.${ext}`;
+    const image = {
+      uri,
+      name: normalizedName,
+      type: mimeType,
+    };
+
+    setQueuedImages((prev) => [...prev, image]);
+  }, []);
+
+  const processQueuedImages = useCallback(async () => {
+    if (!queuedImages.length) {
+      Alert.alert('No images yet', 'Capture or choose at least one receipt image first.');
+      return;
+    }
+
+    let cleanupStatusTimer;
+    try {
+      setUploading(true);
+      // Upload pages in order. First request replaces prior receipt; remaining requests append.
+      for (let i = 0; i < queuedImages.length; i += 1) {
+        const isAppend = i > 0;
+        setStatusText(`Uploading page ${i + 1} of ${queuedImages.length}…`);
+        await receipts.upload(billId, queuedImages[i], { append: isAppend });
+      }
+      setUploading(false);
+
+      setParsing(true);
+      // Parse once after all pages are uploaded so backend can run merge/dedupe totals.
+      setStatusText('Extracting text…');
+      cleanupStatusTimer = setTimeout(() => {
+        setStatusText('Cleaning receipt…');
+      }, 900);
+
+      const parseRes = await receipts.parse(billId);
+      clearTimeout(cleanupStatusTimer);
+
+      // Expand any multi-quantity lines into individual quantity=1 rows so
+      // each unit can be assigned to a different member. "2 Chicken
+      // Sandwich @ $20" becomes two separate "1 Chicken Sandwich @ $10"
+      // rows. We distribute any cent-remainder across the first rows so
+      // the sum still matches the original line total exactly.
+      //
+      // The parse response's items are the OCR output and do NOT carry the
+      // persisted DB ids we need for `deletes`. Pull the stored rows from
+      // listItems, which returns the actual receipt_item records.
+      let itemsRes;
       try {
-        setUploading(true);
-        setStatusText('Uploading receipt…');
+        itemsRes = await receipts.listItems(billId);
+      } catch (listErr) {
+        if (__DEV__) console.warn('[SCAN] listItems failed after parse', listErr);
+      }
+      const storedItems = Array.isArray(itemsRes?.data)
+        ? itemsRes.data
+        : Array.isArray(itemsRes?.data?.items)
+          ? itemsRes.data.items
+          : [];
 
-        const file = {
-          uri,
-          name: fileName,
-          type: mimeType,
-        };
+      const needsExpansion = storedItems.some(
+        (it) => it?.id && Math.floor(Number(it.quantity ?? 1)) > 1,
+      );
 
-        await receipts.upload(billId, file);
-        setUploading(false);
+      if (needsExpansion) {
+        setStatusText('Splitting items by unit…');
 
-        setParsing(true);
-        setStatusText('Extracting text…');
-        cleanupStatusTimer = setTimeout(() => {
-          setStatusText('Cleaning receipt…');
-        }, 900);
+        const deletes = [];
+        const creates = [];
 
-        const parseRes = await receipts.parse(billId);
-        clearTimeout(cleanupStatusTimer);
+        for (const it of storedItems) {
+          const qty = Math.max(1, Math.floor(Number(it.quantity ?? 1)));
+          if (!it?.id || qty <= 1) continue;
 
-        // Expand any multi-quantity lines into individual quantity=1 rows so
-        // each unit can be assigned to a different member. "2 Chicken
-        // Sandwich @ $20" becomes two separate "1 Chicken Sandwich @ $10"
-        // rows. We distribute any cent-remainder across the first rows so
-        // the sum still matches the original line total exactly.
-        //
-        // The parse response's items are the OCR output and do NOT carry the
-        // persisted DB ids we need for `deletes`. Pull the stored rows from
-        // listItems, which returns the actual receipt_item records.
-        let itemsRes;
-        try {
-          itemsRes = await receipts.listItems(billId);
-        } catch (listErr) {
-          if (__DEV__) console.warn('[SCAN] listItems failed after parse', listErr);
-        }
-        const storedItems = Array.isArray(itemsRes?.data)
-          ? itemsRes.data
-          : Array.isArray(itemsRes?.data?.items)
-            ? itemsRes.data.items
-            : [];
+          deletes.push(it.id);
 
-        const needsExpansion = storedItems.some(
-          (it) => it?.id && Math.floor(Number(it.quantity ?? 1)) > 1,
-        );
+          const totalCents = Math.round(parseFloat(it.total_price ?? 0) * 100);
+          const baseCents = Math.floor(totalCents / qty);
+          const remainder = totalCents - baseCents * qty;
 
-        if (needsExpansion) {
-          setStatusText('Splitting items by unit…');
-
-          const deletes = [];
-          const creates = [];
-
-          for (const it of storedItems) {
-            const qty = Math.max(1, Math.floor(Number(it.quantity ?? 1)));
-            if (!it?.id || qty <= 1) continue;
-
-            deletes.push(it.id);
-
-            const totalCents = Math.round(parseFloat(it.total_price ?? 0) * 100);
-            const baseCents = Math.floor(totalCents / qty);
-            const remainder = totalCents - baseCents * qty;
-
-            for (let i = 0; i < qty; i++) {
-              const cents = baseCents + (i < remainder ? 1 : 0);
-              creates.push({
-                name: it.name,
-                quantity: 1,
-                total_price: (cents / 100).toFixed(2),
-              });
-            }
+          for (let i = 0; i < qty; i++) {
+            const cents = baseCents + (i < remainder ? 1 : 0);
+            creates.push({
+              name: it.name,
+              quantity: 1,
+              total_price: (cents / 100).toFixed(2),
+            });
           }
+        }
 
-          if (creates.length > 0 && deletes.length > 0) {
-            try {
-              const syncRes = await receipts.syncItems(billId, {
-                creates,
-                updates: [],
-                deletes,
-              });
-              const syncedItems = syncRes?.data?.items ?? [];
-              setParsedData({
-                ...parseRes.data,
-                items: syncedItems.length > 0 ? syncedItems : parseRes.data?.items,
-              });
-            } catch (syncErr) {
-              if (__DEV__) console.warn('[SCAN] expansion sync failed', syncErr);
-              setParsedData(parseRes.data);
-            }
-          } else {
+        if (creates.length > 0 && deletes.length > 0) {
+          try {
+            const syncRes = await receipts.syncItems(billId, {
+              creates,
+              updates: [],
+              deletes,
+            });
+            const syncedItems = syncRes?.data?.items ?? [];
+            setParsedData({
+              ...parseRes.data,
+              items: syncedItems.length > 0 ? syncedItems : parseRes.data?.items,
+            });
+          } catch (syncErr) {
+            if (__DEV__) console.warn('[SCAN] expansion sync failed', syncErr);
             setParsedData(parseRes.data);
           }
         } else {
           setParsedData(parseRes.data);
         }
-
-        setParsing(false);
-        setStatusText('Receipt parsed!');
-
-        setTimeout(() => {
-          navigation.navigate('BillSplit', { billId, refresh: Date.now() });
-        }, 800);
-      } catch (err) {
-        if (cleanupStatusTimer) clearTimeout(cleanupStatusTimer);
-        setUploading(false);
-        setParsing(false);
-        setStatusText('Line up the receipt, then tap Capture');
-        Alert.alert('Error', err?.message ?? err?.error?.message ?? 'Failed to process receipt');
+      } else {
+        setParsedData(parseRes.data);
       }
-    },
-    [billId, navigation],
-  );
+
+      setParsing(false);
+      setStatusText('Receipt parsed!');
+
+      setTimeout(() => {
+        navigation.navigate('BillSplit', { billId, refresh: Date.now() });
+      }, 800);
+    } catch (err) {
+      if (cleanupStatusTimer) clearTimeout(cleanupStatusTimer);
+      setUploading(false);
+      setParsing(false);
+      setStatusText('Line up the receipt, then tap Capture');
+      Alert.alert('Error', err?.message ?? err?.error?.message ?? 'Failed to process receipt');
+    }
+  }, [billId, navigation, queuedImages]);
 
   const captureFromPreview = async () => {
     if (!cameraRef.current || !cameraReady) {
@@ -233,7 +259,7 @@ export default function ScanReceiptScreen({ navigation, route }) {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.85 });
       const ext = photo.format === 'png' ? 'png' : 'jpg';
       const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
-      await processReceiptUri(photo.uri, mime, `receipt.${ext}`);
+      enqueueReceiptImage(photo.uri, mime, `receipt-${Date.now()}.${ext}`);
     } catch (err) {
       Alert.alert('Capture failed', err?.message ?? 'Could not take photo');
     } finally {
@@ -252,10 +278,10 @@ export default function ScanReceiptScreen({ navigation, route }) {
       if (result.canceled) return;
 
       const asset = result.assets[0];
-      await processReceiptUri(
+      enqueueReceiptImage(
         asset.uri,
         asset.mimeType || 'image/jpeg',
-        asset.fileName || 'receipt.jpg',
+        asset.fileName || `receipt-${Date.now()}.jpg`,
       );
     } catch (err) {
       Alert.alert('Error', err?.message ?? err?.error?.message ?? 'Failed to pick image');
@@ -345,6 +371,30 @@ export default function ScanReceiptScreen({ navigation, route }) {
               </View>
             </View>
           )}
+
+          {!parsedData && queuedImages.length > 0 && (
+            <View style={styles.queuedSection}>
+              <View style={styles.queuedHeader}>
+                <Text style={styles.queuedTitle}>Receipt pages ({queuedImages.length})</Text>
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setQueuedImages([]);
+                  }}
+                >
+                  <Text style={styles.clearText}>Clear</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.queuedRow}>
+                {queuedImages.map((img, idx) => (
+                  <View key={`${img.name}-${idx}`} style={styles.pageChip}>
+                    <MaterialIcons name="description" size={16} color={colors.secondary} />
+                    <Text style={styles.pageChipText}>Page {idx + 1}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
         </View>
 
         {!busy && !parsedData && (
@@ -383,7 +433,7 @@ export default function ScanReceiptScreen({ navigation, route }) {
                   >
                     <MaterialIcons name="camera-alt" size={22} color={colors.onSecondary} />
                     <Text style={styles.actionTextPrimary}>
-                      {cameraReady ? 'Capture' : 'Starting camera…'}
+                      {cameraReady ? 'Add photo' : 'Starting camera…'}
                     </Text>
                   </LinearGradient>
                 </TouchableOpacity>
@@ -407,6 +457,26 @@ export default function ScanReceiptScreen({ navigation, route }) {
               >
                 <MaterialIcons name="image" size={22} color={colors.secondary} />
                 <Text style={styles.actionTextSecondary}>Choose from gallery</Text>
+              </TouchableOpacity>
+            )}
+
+            {queuedImages.length > 0 && (
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={processQueuedImages}
+                style={styles.actionBtnFull}
+              >
+                <LinearGradient
+                  colors={[colors.secondary, colors.secondaryDim]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.actionGradient}
+                >
+                  <MaterialIcons name="auto-awesome" size={22} color={colors.onSecondary} />
+                  <Text style={styles.actionTextPrimary}>
+                    {`Process ${queuedImages.length} ${queuedImages.length > 1 ? 'photos' : 'photo'}`}
+                  </Text>
+                </LinearGradient>
               </TouchableOpacity>
             )}
           </>
@@ -541,13 +611,14 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 20,
-    paddingHorizontal: 24,
-    gap: 16,
+    paddingHorizontal: 20,
+    gap: 12,
   },
   statusCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     borderRadius: radii.xl,
-    padding: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     ...Platform.select({
       ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 16 }, shadowOpacity: 0.12, shadowRadius: 32 },
       android: { elevation: 8 },
@@ -562,9 +633,9 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_700Bold',
     fontSize: 10,
     fontWeight: '700',
-    letterSpacing: 2,
+    letterSpacing: 1.8,
     color: colors.secondary,
-    marginBottom: 4,
+    marginBottom: 3,
     textTransform: 'uppercase',
   },
   statusTitle: {
@@ -572,6 +643,8 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     color: colors.onSurface,
+    lineHeight: 24,
+    maxWidth: '95%',
   },
   aiBadge: {
     flexDirection: 'row',
@@ -595,10 +668,10 @@ const styles = StyleSheet.create({
     color: colors.onSecondaryContainer,
   },
   parsedSummary: {
-    marginTop: 16,
+    marginTop: 12,
     backgroundColor: colors.surfaceContainerLow,
     borderRadius: radii.md,
-    padding: 14,
+    padding: 12,
     gap: 8,
   },
   parsedRow: {
@@ -621,26 +694,66 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.secondary,
   },
+  queuedSection: {
+    marginTop: 12,
+    gap: 8,
+  },
+  queuedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  queuedTitle: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: colors.onSurface,
+  },
+  clearText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: colors.secondary,
+  },
+  queuedRow: {
+    gap: 8,
+  },
+  pageChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.full,
+    backgroundColor: colors.surfaceContainerLow,
+  },
+  pageChipText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 11,
+    color: colors.onSurface,
+  },
 
   actionRow: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
   },
   actionBtnPrimary: {
-    flex: 2,
+    flex: 1,
+  },
+  actionBtnFull: {
+    width: '100%',
   },
   actionGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    paddingVertical: 16,
+    paddingVertical: 15,
+    minHeight: 54,
     borderRadius: radii.full,
     ...shadows.settleButton,
   },
   actionTextPrimary: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '700',
     color: colors.onSecondary,
   },
@@ -650,13 +763,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    paddingVertical: 16,
+    minHeight: 54,
+    paddingHorizontal: 14,
     borderRadius: radii.full,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(10, 91, 73, 0.14)',
   },
   actionTextSecondary: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
     color: colors.secondary,
   },
@@ -675,7 +791,7 @@ const styles = StyleSheet.create({
   },
   skipBtn: {
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 6,
   },
   skipText: {
     fontFamily: 'Inter_500Medium',
