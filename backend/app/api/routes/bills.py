@@ -4,11 +4,16 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
+from app.models.bill import Bill
+from app.models.bill_member import BillMember
+from app.models.receipt import ReceiptUpload
+from app.models.receipt_item import ReceiptItem
 from app.core.response import success_response, error_response
 from app.schemas.bill import BillCreate, BillUpdate, BillOut, BillActivity, ServiceFeeUpdate
 from app.schemas.bill_member import BillMemberOut
@@ -20,6 +25,11 @@ from app.services.payment_service import PaymentService
 from app.services.payment_notification_service import PaymentNotificationService
 
 router = APIRouter(prefix="/bills", tags=["Bills"])
+
+# Minimum age (in seconds) before an empty draft is eligible for auto-cleanup.
+# Protects freshly-created drafts from being wiped out while the user is still
+# on the scan/edit flow and hasn't uploaded a receipt yet.
+EMPTY_DRAFT_MIN_AGE_SECONDS = 120
 
 
 def _bill_out(bill) -> dict:
@@ -124,6 +134,75 @@ def delete_bill(
         return error_response("NOT_FOUND", "Bill not found", 404)
 
     return success_response(message="Bill deleted")
+
+
+@router.post("/cleanup-empty-drafts")
+def cleanup_empty_drafts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete the caller's stale, empty draft bills.
+
+    A draft is "empty" when it has no receipt, no receipt items, and no
+    members other than the owner. We also require it to be older than
+    ``EMPTY_DRAFT_MIN_AGE_SECONDS`` so a bill the user just created via
+    the dashboard FAB (but hasn't had a chance to upload a receipt to yet)
+    isn't ripped out from under them.
+    """
+    user_id = str(current_user.id)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=EMPTY_DRAFT_MIN_AGE_SECONDS)
+
+    # Member count per bill (owner counts as a member too).
+    member_count_subq = (
+        db.query(
+            BillMember.bill_id.label("bill_id"),
+            func.count(BillMember.id).label("member_count"),
+        )
+        .group_by(BillMember.bill_id)
+        .subquery()
+    )
+
+    # Count receipt items per bill. A left join would work too, but using
+    # a subquery keeps the main SELECT clean.
+    item_count_subq = (
+        db.query(
+            ReceiptItem.bill_id.label("bill_id"),
+            func.count(ReceiptItem.id).label("item_count"),
+        )
+        .group_by(ReceiptItem.bill_id)
+        .subquery()
+    )
+
+    candidates = (
+        db.query(Bill, member_count_subq.c.member_count, item_count_subq.c.item_count)
+        .outerjoin(member_count_subq, member_count_subq.c.bill_id == Bill.id)
+        .outerjoin(item_count_subq, item_count_subq.c.bill_id == Bill.id)
+        .outerjoin(ReceiptUpload, ReceiptUpload.bill_id == Bill.id)
+        .filter(
+            Bill.owner_id == user_id,
+            Bill.status == "draft",
+            Bill.created_at < cutoff,
+            ReceiptUpload.id.is_(None),
+        )
+        .all()
+    )
+
+    deleted_ids: list[str] = []
+    for bill, member_count, item_count in candidates:
+        if (member_count or 0) > 1:
+            continue
+        if (item_count or 0) > 0:
+            continue
+        deleted_ids.append(str(bill.id))
+        db.delete(bill)
+
+    if deleted_ids:
+        db.commit()
+
+    return success_response(
+        data={"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)},
+        message=f"Cleaned up {len(deleted_ids)} empty draft bill(s)",
+    )
 
 
 @router.post("/{bill_id}/send-payment-requests")

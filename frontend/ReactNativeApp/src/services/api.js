@@ -211,6 +211,8 @@ export const bills = {
 
   delete: (billId) => client.delete(`/bills/${billId}`),
 
+  cleanupEmptyDrafts: () => client.post('/bills/cleanup-empty-drafts'),
+
   getSummary: (billId) => client.get(`/bills/${billId}/summary`),
 
   getActivity: (billId) => client.get(`/bills/${billId}/activity`),

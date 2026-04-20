@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,11 +11,14 @@ import {
   RefreshControl,
   Alert,
   Dimensions,
+  Animated,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors, radii, shadows, spacing } from '../theme';
 import { useAuth } from '../contexts/AuthContext';
 import { bills } from '../services/api';
@@ -204,6 +207,86 @@ function MemberCountBubbles({ count }) {
   );
 }
 
+/**
+ * Wraps a bill card with left-swipe-to-delete. Only drafts are actually
+ * deletable from here; for other statuses we just render the child unchanged
+ * so users can't accidentally delete an active or settled bill.
+ */
+function SwipeToDeleteBill({ bill, onDelete, children }) {
+  const swipeableRef = useRef(null);
+  const isDraft = bill?.status === 'draft';
+
+  if (!isDraft) {
+    return children;
+  }
+
+  const close = () => {
+    try {
+      swipeableRef.current?.close();
+    } catch {
+      // ignore — ref may already be unmounted mid-animation
+    }
+  };
+
+  const confirmDelete = () => {
+    Alert.alert(
+      'Delete draft?',
+      'This will permanently remove this draft bill. This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel', onPress: close },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            close();
+            try {
+              await onDelete(bill);
+            } catch (err) {
+              Alert.alert(
+                'Could not delete',
+                err?.message ?? 'Please try again.',
+              );
+            }
+          },
+        },
+      ],
+      { cancelable: true, onDismiss: close },
+    );
+  };
+
+  const renderRightActions = (_progress, dragX) => {
+    const scale = dragX.interpolate({
+      inputRange: [-100, -40, 0],
+      outputRange: [1, 0.85, 0.6],
+      extrapolate: 'clamp',
+    });
+    return (
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={confirmDelete}
+        style={styles.swipeDeleteAction}
+      >
+        <Animated.View style={{ transform: [{ scale }], alignItems: 'center' }}>
+          <MaterialIcons name="delete-outline" size={24} color={colors.onError} />
+          <Text style={styles.swipeDeleteText}>Delete</Text>
+        </Animated.View>
+      </TouchableOpacity>
+    );
+  };
+
+  return (
+    <Swipeable
+      ref={swipeableRef}
+      renderRightActions={renderRightActions}
+      rightThreshold={40}
+      friction={2}
+      overshootRight={false}
+    >
+      {children}
+    </Swipeable>
+  );
+}
+
 function FeaturedBillCard({ bill, onSettle }) {
   if (!bill) return null;
   const remaining = parseFloat(bill.remaining ?? bill.total ?? 0);
@@ -265,7 +348,7 @@ function SecondaryBillCard({ bill }) {
   );
 }
 
-function ActiveBillsSection({ bills, onSettle, isLoading }) {
+function ActiveBillsSection({ bills, onSettle, onDelete, isLoading }) {
   // While the backend is cold-starting, show a card-shaped spinner so the
   // page layout stays stable instead of collapsing to an empty state.
   if (isLoading) {
@@ -304,11 +387,15 @@ function ActiveBillsSection({ bills, onSettle, isLoading }) {
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>Active Bills</Text>        
       </View>
-      <FeaturedBillCard bill={featured} onSettle={onSettle} />
+      <SwipeToDeleteBill bill={featured} onDelete={onDelete}>
+        <FeaturedBillCard bill={featured} onSettle={onSettle} />
+      </SwipeToDeleteBill>
       {rest.length > 0 && <View style={styles.secondaryBillsGap} />}
       {rest.slice(0, 3).map((bill) => (
         <React.Fragment key={bill.id}>
-          <SecondaryBillCard bill={bill} />
+          <SwipeToDeleteBill bill={bill} onDelete={onDelete}>
+            <SecondaryBillCard bill={bill} />
+          </SwipeToDeleteBill>
           <View style={styles.billCardGap} />
         </React.Fragment>
       ))}
@@ -447,9 +534,48 @@ export default function DashboardScreen({ navigation }) {
     setRefreshing(false);
   }, [refetchOverview, refetchBills]);
 
+  // Auto-delete stale empty drafts whenever the dashboard regains focus.
+  // We fire-and-forget so a cold network doesn't block the UI; a successful
+  // cleanup refreshes the active-bills list so ghost drafts disappear.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        try {
+          const res = await bills.cleanupEmptyDrafts();
+          const deleted = res?.data?.deleted_count ?? 0;
+          if (!cancelled && deleted > 0) {
+            await Promise.all([refetchBills(), refetchOverview()]);
+          }
+        } catch (err) {
+          if (__DEV__) {
+            console.warn('[Dashboard] cleanupEmptyDrafts failed', err);
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [refetchBills, refetchOverview]),
+  );
+
   const handleSettle = (bill) => {
     navigation.navigate('BillSplit', { billId: bill.id });
   };
+
+  const handleDeleteBill = useCallback(
+    async (bill) => {
+      if (!bill?.id) return;
+      try {
+        await bills.delete(bill.id);
+      } finally {
+        // Always refetch — the server is the source of truth. If the
+        // delete failed the bill simply reappears, which is the right UX.
+        await Promise.all([refetchBills(), refetchOverview()]);
+      }
+    },
+    [refetchBills, refetchOverview],
+  );
 
   const handleCreateBillFromReceipt = useCallback(async () => {
     if (creatingBill) return;
@@ -494,6 +620,7 @@ export default function DashboardScreen({ navigation }) {
         <ActiveBillsSection
           bills={activeBills}
           onSettle={handleSettle}
+          onDelete={handleDeleteBill}
           isLoading={billsLoadingInline}
         />
         <RecentActivitySection
@@ -938,6 +1065,25 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     color: colors.onSurfaceVariant,
     marginTop: 2,
+  },
+
+  swipeDeleteAction: {
+    backgroundColor: colors.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 96,
+    marginLeft: 12,
+    borderRadius: radii.xl,
+    paddingVertical: 16,
+  },
+  swipeDeleteText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.onError,
+    marginTop: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
   },
 
   fab: {
