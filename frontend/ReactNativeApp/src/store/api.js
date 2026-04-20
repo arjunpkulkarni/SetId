@@ -1,6 +1,15 @@
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
 import { BASE_URL } from '../services/api';
 import { getToken, removeToken } from '../services/authStorage';
+import { offlineStorage } from '../services/offlineStorage';
+
+/** AsyncStorage key for the combined dashboard payload. Bumping this prefix
+ *  forces every client to re-fetch (use if the server contract changes). */
+export const DASHBOARD_CACHE_KEY = 'dashboard_v1';
+/** Accept a cached payload up to 24h old on cold open — RTK Query refetches
+ *  in the background anyway, so showing slightly stale numbers for 200ms
+ *  is strictly better than a blank screen. */
+const DASHBOARD_CACHE_TTL = 24 * 60 * 60 * 1000;
 
 /**
  * RTK Query API slice — the cache, deduplication, and revalidation story.
@@ -65,6 +74,40 @@ export const api = createApi({
   refetchOnReconnect: true,
   endpoints: (builder) => ({
     // ─── Dashboard ─────────────────────────────────────────────────────
+    //
+    // Preferred endpoint: one round-trip returns both the balance overview
+    // and the active bill list. We persist the last-good payload to
+    // AsyncStorage via `onQueryStarted` so a cold app launch can hydrate
+    // instantly from disk while the background refetch runs.
+    getDashboard: builder.query({
+      query: () => '/dashboard',
+      transformResponse: (response) => ({
+        overview: response.data?.overview ?? null,
+        activeBills: response.data?.active_bills ?? [],
+      }),
+      providesTags: (result) => {
+        const billTags = result?.activeBills
+          ? result.activeBills.map((b) => ({ type: 'Bill', id: b.id }))
+          : [];
+        return [
+          { type: 'Dashboard', id: 'SUMMARY' },
+          { type: 'Bill', id: 'LIST' },
+          ...billTags,
+        ];
+      },
+      async onQueryStarted(_arg, { queryFulfilled }) {
+        try {
+          const { data } = await queryFulfilled;
+          // Write-through to AsyncStorage so the next cold start is instant.
+          offlineStorage.set(DASHBOARD_CACHE_KEY, data, DASHBOARD_CACHE_TTL);
+        } catch {
+          // Network errors are handled by the UI; we just skip persisting.
+        }
+      },
+    }),
+
+    // ─── Legacy granular endpoints ────────────────────────────────────
+    // Kept so screens that haven't migrated to `getDashboard` keep working.
     getDashboardOverview: builder.query({
       query: () => '/dashboard/overview',
       transformResponse: (response) => response.data,
@@ -131,7 +174,36 @@ export const api = createApi({
   }),
 });
 
+/**
+ * Seed the dashboard query cache from AsyncStorage before the first network
+ * response arrives. Call this once at app boot (before rendering the
+ * authenticated tree). If there's no cached payload we no-op and the
+ * dashboard will show its normal skeleton.
+ *
+ * Returns the hydrated payload (or null) so callers can do extra work.
+ */
+export async function hydrateDashboardFromCache(dispatch) {
+  try {
+    const cached = await offlineStorage.get(DASHBOARD_CACHE_KEY, {
+      allowStale: true,
+    });
+    if (!cached?.data) return null;
+
+    // `upsertQueryData` injects data into the RTK Query cache without
+    // triggering a network request — the next subscriber sees it
+    // immediately. The real refetch still runs because refetchOnFocus /
+    // refetchOnMountOrArgChange are on for `useGetDashboardQuery`.
+    dispatch(
+      api.util.upsertQueryData('getDashboard', undefined, cached.data),
+    );
+    return cached.data;
+  } catch {
+    return null;
+  }
+}
+
 export const {
+  useGetDashboardQuery,
   useGetDashboardOverviewQuery,
   useGetActiveBillsQuery,
   useGetBillSummaryQuery,

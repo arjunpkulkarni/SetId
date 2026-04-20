@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useDispatch } from 'react-redux';
 import {
   View,
   Text,
@@ -23,8 +24,8 @@ import { colors, radii, shadows, spacing } from '../theme';
 import { useAuth } from '../contexts/AuthContext';
 import { bills } from '../services/api';
 import {
-  useGetDashboardOverviewQuery,
-  useGetActiveBillsQuery,
+  useGetDashboardQuery,
+  hydrateDashboardFromCache,
 } from '../store/api';
 import LazyImage from '../components/LazyImage';
 
@@ -498,31 +499,60 @@ function FloatingActionButton({ tabBarHeight, onPress, loading }) {
 
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
+// Throttle window for the focus-triggered draft cleanup. The backend call
+// isn't free and rapid tab-switching was firing it on every focus; once a
+// minute is plenty for garbage-collecting stale drafts.
+const CLEANUP_THROTTLE_MS = 60 * 1000;
+
 export default function DashboardScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const { user } = useAuth();
+  const dispatch = useDispatch();
 
-  // RTK Query handles caching, deduplication, and refetch-on-focus for us.
-  // The two hooks run in parallel; initial render only shows the skeleton
-  // once (on cold-open) and re-renders hit the cache instantly.
-  const {
-    data: overview,
-    isLoading: overviewLoading,
-    refetch: refetchOverview,
-  } = useGetDashboardOverviewQuery();
+  // Hydrate the RTK Query cache from AsyncStorage once per mount. This
+  // runs synchronously (via `upsertQueryData`) the moment the disk read
+  // resolves, so the very first paint of the dashboard shows the last-known
+  // balance + active bills instead of a skeleton — while a background
+  // refetch silently updates the numbers.
+  const hydrationStartedRef = useRef(false);
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    if (hydrationStartedRef.current) return;
+    hydrationStartedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      await hydrateDashboardFromCache(dispatch);
+      if (!cancelled) setHydrated(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dispatch]);
 
+  // Single round-trip: overview + active bill list in one payload. The
+  // `getDashboard` endpoint persists to AsyncStorage via `onQueryStarted`
+  // so repeat cold opens are instant.
   const {
-    data: activeBills = [],
-    isLoading: billsLoading,
-    refetch: refetchBills,
-  } = useGetActiveBillsQuery();
+    data,
+    isLoading: dashboardLoading,
+    refetch: refetchDashboard,
+  } = useGetDashboardQuery();
+
+  const overview = data?.overview ?? null;
+  const activeBills = data?.activeBills ?? [];
 
   // Per-section loading flags. We *don't* gate the whole page on these —
   // the layout always renders so the user immediately sees their name,
   // avatar, and the FAB, with inline spinners where data is still fetching.
-  const balanceLoading = overviewLoading && !overview;
-  const billsLoadingInline = billsLoading && activeBills.length === 0;
+  //
+  // "Loading" means: we don't have data yet AND (the network is still in
+  // flight OR we haven't finished reading the disk cache). This prevents
+  // a brief flash of a stale "$0.00" while the AsyncStorage read is
+  // resolving on cold launch.
+  const balanceLoading = !overview && (dashboardLoading || !hydrated);
+  const billsLoadingInline =
+    activeBills.length === 0 && (dashboardLoading || !hydrated);
   const recentActivity = [];
 
   const [refreshing, setRefreshing] = useState(false);
@@ -530,22 +560,30 @@ export default function DashboardScreen({ navigation }) {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([refetchOverview(), refetchBills()]);
+    await refetchDashboard();
     setRefreshing(false);
-  }, [refetchOverview, refetchBills]);
+  }, [refetchDashboard]);
 
   // Auto-delete stale empty drafts whenever the dashboard regains focus.
   // We fire-and-forget so a cold network doesn't block the UI; a successful
-  // cleanup refreshes the active-bills list so ghost drafts disappear.
+  // cleanup refetches the dashboard so ghost drafts disappear. Throttled
+  // to once per minute so rapid tab switches don't pile on extra calls.
+  const lastCleanupRef = useRef(0);
   useFocusEffect(
     useCallback(() => {
+      const now = Date.now();
+      if (now - lastCleanupRef.current < CLEANUP_THROTTLE_MS) {
+        return undefined;
+      }
+      lastCleanupRef.current = now;
+
       let cancelled = false;
       (async () => {
         try {
           const res = await bills.cleanupEmptyDrafts();
           const deleted = res?.data?.deleted_count ?? 0;
           if (!cancelled && deleted > 0) {
-            await Promise.all([refetchBills(), refetchOverview()]);
+            await refetchDashboard();
           }
         } catch (err) {
           if (__DEV__) {
@@ -556,7 +594,7 @@ export default function DashboardScreen({ navigation }) {
       return () => {
         cancelled = true;
       };
-    }, [refetchBills, refetchOverview]),
+    }, [refetchDashboard]),
   );
 
   const handleSettle = (bill) => {
@@ -571,10 +609,10 @@ export default function DashboardScreen({ navigation }) {
       } finally {
         // Always refetch — the server is the source of truth. If the
         // delete failed the bill simply reappears, which is the right UX.
-        await Promise.all([refetchBills(), refetchOverview()]);
+        await refetchDashboard();
       }
     },
-    [refetchBills, refetchOverview],
+    [refetchDashboard],
   );
 
   const handleCreateBillFromReceipt = useCallback(async () => {

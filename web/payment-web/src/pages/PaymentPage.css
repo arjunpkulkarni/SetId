@@ -1,0 +1,104 @@
+.pay-page {
+  min-height: 100vh;
+  background: var(--color-background);
+  padding: var(--spacing-md);
+  display: flex;
+  justify-content: center;
+}
+
+.pay-container {
+  width: 100%;
+  max-width: 480px;
+  padding: 0 var(--spacing-lg);
+  padding-bottom: var(--spacing-2xl);
+}
+
+/* -- Hero (matches ReviewPaymentScreen.heroSection) -- */
+
+.hero-section {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.hero-icon {
+  width: 80px;
+  height: 80px;
+  border-radius: 40px;
+  background: var(--color-surface-low);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 24px;
+}
+
+.hero-title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  color: var(--color-on-surface);
+  margin-bottom: 8px;
+}
+
+.hero-subtitle {
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--color-on-surface-variant);
+  max-width: 280px;
+  margin: 0 auto;
+  line-height: 22px;
+}
+
+/* -- No Stripe fallback -- */
+
+.no-stripe-card {
+  background: var(--color-surface-low);
+  border-radius: var(--radius-xl);
+  padding: var(--spacing-lg);
+  text-align: center;
+}
+
+.no-stripe-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-on-surface-variant);
+}
+
+/* -- Security & participants footer -- */
+
+.security-footer {
+  display: flex;
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.footer-card {
+  flex: 1;
+  background: var(--color-surface-low);
+  border-radius: var(--radius-xl);
+  padding: 20px;
+}
+
+.footer-card-icon {
+  font-size: 22px;
+  margin-bottom: 10px;
+}
+
+.footer-card-label {
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--color-on-surface-variant);
+  margin-bottom: 8px;
+}
+
+.footer-card-value {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-on-surface);
+  line-height: 17px;
+}

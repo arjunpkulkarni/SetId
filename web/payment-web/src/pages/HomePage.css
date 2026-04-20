@@ -1,0 +1,127 @@
+.home-page {
+  min-height: 100vh;
+  background: var(--color-background);
+  padding: var(--spacing-md);
+  display: flex;
+  justify-content: center;
+}
+
+.home-container {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.home-brand {
+  padding: var(--spacing-xl) 0 var(--spacing-2xl);
+  text-align: center;
+}
+
+/* ── Hero ── */
+
+.home-hero {
+  text-align: center;
+  margin-bottom: 36px;
+}
+
+.home-icon {
+  width: 88px;
+  height: 88px;
+  border-radius: 44px;
+  background: var(--color-surface-low);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 24px;
+}
+
+.home-title {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  line-height: 1.15;
+  color: var(--color-on-surface);
+  margin-bottom: 12px;
+}
+
+.home-subtitle {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--color-on-surface-variant);
+  max-width: 300px;
+  margin: 0 auto;
+  line-height: 1.5;
+}
+
+/* ── Form ── */
+
+.home-form {
+  width: 100%;
+  background: var(--color-surface-lowest);
+  border-radius: var(--radius-xl);
+  padding: var(--spacing-lg);
+}
+
+.home-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-on-surface);
+  margin-bottom: var(--spacing-sm);
+}
+
+.home-input {
+  width: 100%;
+  height: 56px;
+  border: 2px solid var(--color-surface-high);
+  border-radius: var(--radius-md);
+  padding: 0 var(--spacing-md);
+  font-family: var(--font-body);
+  font-size: 17px;
+  color: var(--color-on-surface);
+  background: var(--color-surface-lowest);
+  outline: none;
+  transition: border-color 0.2s;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+.home-input::placeholder {
+  color: var(--color-outline-variant);
+  letter-spacing: 0;
+}
+
+.home-input:focus {
+  border-color: var(--color-secondary);
+  box-shadow: 0 0 0 3px rgba(0, 108, 92, 0.1);
+}
+
+.home-error {
+  margin-top: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--color-error-container);
+  color: var(--color-error);
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.home-join-btn {
+  width: 100%;
+  margin-top: var(--spacing-lg);
+  height: 52px;
+  font-size: 17px;
+}
+
+/* ── Footer text ── */
+
+.home-footer-text {
+  margin-top: var(--spacing-xl);
+  font-size: 13px;
+  color: var(--color-outline-variant);
+  text-align: center;
+}
