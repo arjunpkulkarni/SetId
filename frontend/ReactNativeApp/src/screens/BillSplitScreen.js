@@ -14,7 +14,11 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, shadows } from '../theme';
-import { receipts as receiptsApi, members as membersApi, paymentMethods as paymentMethodsApi } from '../services/api';
+import {
+  receipts as receiptsApi,
+  members as membersApi,
+  stripeConnect,
+} from '../services/api';
 import useBillWebSocket from '../hooks/useBillWebSocket';
 import { useBillData } from '../hooks/useBillData';
 import {
@@ -431,21 +435,28 @@ export default function BillSplitScreen({ navigation, route }) {
 
     setSaving(true);
     try {
-      const pmRes = await paymentMethodsApi.list();
-      const paymentMethods = pmRes.data ?? [];
+      // Gate: the HOST needs a Connect account with payouts enabled, not a
+      // Customer-side payment method. Customer PMs are for charging guests;
+      // Connect payouts are how the host receives those charges. A host
+      // without a payout destination would collect nothing when guests pay.
+      const statusRes = await stripeConnect.getStatus();
+      const s = statusRes?.data ?? {};
+      const ready = !!(
+        s.connected
+        && s.payouts_enabled
+        && s.has_instant_external_account
+      );
 
-      if (paymentMethods.length === 0) {
+      if (!ready) {
         setSaving(false);
         Alert.alert(
-          'Payment Method Required',
-          'You need to add a payment method to receive payments from your group.',
+          'Set up payouts',
+          'Add a debit card to receive your share before sending this bill to the group.',
           [
             { text: 'Cancel', style: 'cancel' },
             {
-              text: 'Add Card',
-              onPress: () => {
-                navigation.navigate('AddPaymentMethod', { billId });
-              },
+              text: 'Set up',
+              onPress: () => navigation.navigate('SetupPayouts'),
             },
           ],
         );
