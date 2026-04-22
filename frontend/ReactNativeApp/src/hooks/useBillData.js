@@ -43,6 +43,37 @@ export function useBillData(billId) {
   const [originalItemSnapshots, setOriginalItemSnapshots] = useState({});
   const [removedItemIds, setRemovedItemIds] = useState({});
 
+  /** Apply a `member_joined` WebSocket payload directly to local state.
+   *
+   *  Historically this event just triggered `fetchSummary(true)` — which
+   *  meant the joining member showed up ~500-1500ms later (one REST
+   *  round-trip for `/bills/:id/summary` + one for `/assignments`). The
+   *  backend already ships the full updated members array in the WS frame,
+   *  so we can splice it in locally and render instantly.
+   *
+   *  Payload shape (from `_broadcast_event(..., "member_joined", ...)` in
+   *  `party_public.py`):
+   *    {
+   *      member_id: str,
+   *      nickname: str,
+   *      members: [{id, nickname, status}, ...],
+   *    }
+   */
+  const applyMemberJoined = useCallback((payload) => {
+    const incoming = payload?.members;
+    if (!Array.isArray(incoming) || incoming.length === 0) return;
+    // Merge so we never regress fields the WS payload omits (e.g. user_id,
+    // avatar) — the payload only carries id/nickname/status, but any member
+    // we already know about should keep its richer fields.
+    setMembers((prev) => {
+      const prevById = new Map(prev.map((m) => [m.id, m]));
+      return incoming.map((m) => ({
+        ...(prevById.get(m.id) || {}),
+        ...m,
+      }));
+    });
+  }, []);
+
   const applyServerItemState = useCallback((nextBill, nextItems, preserveAssignments = false) => {
     setBill(nextBill);
     setItems(nextItems);
@@ -263,5 +294,6 @@ export function useBillData(billId) {
     handlePullToRefresh,
     handleToggleMember,
     applyServerItemState,
+    applyMemberJoined,
   };
 }

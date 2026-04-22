@@ -100,18 +100,27 @@ export default function BillSplitScreen({ navigation, route }) {
     handlePullToRefresh,
     handleToggleMember,
     applyServerItemState,
+    applyMemberJoined,
   } = useBillData(billId);
 
   const [saving, setSaving] = useState(false);
 
 
   // ─── WebSocket: real-time updates ───────────────────────────────────────────
-  const [shouldConnectWS, setShouldConnectWS] = useState(false);
-  
+  //
+  // We connect as soon as we have a `billId` — the hook is reentrant and the
+  // handshake happily runs in parallel with the initial REST load. Gating
+  // the WS behind `loading` + a 500ms timer used to delay the "connected"
+  // state by 1-2s on cold open, which is how new members appeared to join
+  // the party "slowly" even though the backend broadcast fired instantly.
   const wsHandlers = useMemo(() => ({
     onConnected: () => {
       if (__DEV__) console.log('[WS] Connected to bill', billId);
-      fetchSummary(true);
+      // Intentionally NO fetchSummary here. The initial useBillData load
+      // already seeded state; re-fetching again at the "connected" moment
+      // is a wasted round-trip that also delays the user-visible "ready"
+      // moment. Any state drift while the socket was opening will be
+      // corrected by the next broadcast or focus refetch.
     },
     onAssignmentUpdate: (data) => {
       if (__DEV__) console.log('[WS] assignment_update received', data);
@@ -119,7 +128,14 @@ export default function BillSplitScreen({ navigation, route }) {
     },
     onMemberJoined: (data) => {
       if (__DEV__) console.log('[WS] member_joined:', data?.nickname ?? data);
-      fetchSummary(true);
+      // Apply the payload directly — the server ships the full updated
+      // members list in the WS frame, so splicing it into local state is
+      // instant. Refetch only as a fallback if the payload is malformed.
+      if (Array.isArray(data?.members) && data.members.length > 0) {
+        applyMemberJoined(data);
+      } else {
+        fetchSummary(true);
+      }
     },
     onPaymentComplete: (data) => {
       if (__DEV__) console.log('[WS] payment_complete:', data);
@@ -128,20 +144,9 @@ export default function BillSplitScreen({ navigation, route }) {
     onAuthError: (code) => {
       if (__DEV__) console.warn('[WS] Auth error, code:', code);
     },
-  }), [billId, fetchSummary]);
+  }), [billId, fetchSummary, applyMemberJoined]);
 
-  // Delay WebSocket connection until after initial data load
-  useEffect(() => {
-    if (!loading) {
-      const timer = setTimeout(() => setShouldConnectWS(true), 500);
-      return () => clearTimeout(timer);
-    }
-  }, [loading]);
-
-  const { connected: wsConnected } = useBillWebSocket(
-    shouldConnectWS ? billId : null, 
-    wsHandlers
-  );
+  const { connected: wsConnected } = useBillWebSocket(billId, wsHandlers);
 
 
 
