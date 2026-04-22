@@ -66,9 +66,22 @@ export default function AddPaymentMethodScreen({ navigation, route }) {
 
       if (!clientSecret) throw new Error('No client secret returned from server');
 
+      // Apple's Pay Sheet always shows a summary of what the user is
+      // agreeing to. For a SetupIntent (no amount being charged right
+      // now) we pass a single `Pending` cart item so the sheet shows a
+      // dash instead of a dollar figure. Without `cartItems` the iOS
+      // SDK rejects the call with "cartItems cannot be null".
       const { setupIntent, error } = await confirmPlatformPaySetupIntent(clientSecret, {
         applePay: {
           merchantCountryCode: 'US',
+          currencyCode: 'USD',
+          cartItems: [
+            {
+              label: 'Save card for future payments',
+              amount: '0.00',
+              paymentType: PlatformPay.PaymentType.Pending,
+            },
+          ],
         },
       });
 

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   Platform,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -13,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CommonActions } from '@react-navigation/native';
 import { colors, radii, shadows } from '../theme';
 import { useAuth } from '../contexts/AuthContext';
+import { bills as billsApi } from '../services/api';
 import LazyImage from '../components/LazyImage';
 
 function formatMoney(n) {
@@ -107,6 +110,12 @@ export default function FundsCollectedScreen({ navigation, route }) {
   const amount = route?.params?.amount ?? 0;
   const merchantName = route?.params?.merchantName;
   const billTitle = route?.params?.billTitle;
+  // `billId` is optional — when it's present (e.g. user came here from
+  // ReviewPayment after sending a bill), we can flip the bill to
+  // `settled` in-place so it moves out of Active on the dashboard.
+  const billId = route?.params?.billId;
+
+  const [completing, setCompleting] = useState(false);
 
   const goDashboard = () => {
     navigation.dispatch(
@@ -122,6 +131,44 @@ export default function FundsCollectedScreen({ navigation, route }) {
           },
         ],
       }),
+    );
+  };
+
+  const handleMarkCompleted = () => {
+    if (!billId) {
+      // No billId in route params — can't know which bill to settle.
+      // This shouldn't normally happen; the confirmation + dashboard
+      // return below still guides the user somewhere sensible.
+      Alert.alert(
+        'Nothing to mark',
+        'This bill is already in your history. Tap Back to Dashboard.',
+      );
+      return;
+    }
+    Alert.alert(
+      'Mark bill completed?',
+      'This moves the bill out of your active list. You can still view it from Activity.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Mark completed',
+          style: 'default',
+          onPress: async () => {
+            if (completing) return;
+            setCompleting(true);
+            try {
+              await billsApi.update(billId, { status: 'settled' });
+              goDashboard();
+            } catch (err) {
+              setCompleting(false);
+              Alert.alert(
+                'Could not update bill',
+                err?.error?.message ?? err?.message ?? 'Please try again.',
+              );
+            }
+          },
+        },
+      ],
     );
   };
 
@@ -141,16 +188,56 @@ export default function FundsCollectedScreen({ navigation, route }) {
         <AmountCard amount={amount} billTitle={billTitle} />
         <InfoCard />
 
-        <TouchableOpacity activeOpacity={0.85} onPress={goDashboard} style={styles.primaryBtn}>
-          <LinearGradient
-            colors={[colors.secondary, colors.secondaryDim]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.primaryGradient}
+        {/* Primary: finalize the bill. Only shown when we know which
+            bill we're on. After tapping, the bill's status flips to
+            `settled` and the dashboard shows it under Settled rather
+            than Active. */}
+        {billId ? (
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={handleMarkCompleted}
+            disabled={completing}
+            style={[styles.primaryBtn, completing && styles.primaryBtnDisabled]}
           >
-            <MaterialIcons name="dashboard" size={22} color={colors.onSecondary} />
-            <Text style={styles.primaryText}>Back to Dashboard</Text>
-          </LinearGradient>
+            <LinearGradient
+              colors={[colors.secondary, colors.secondaryDim]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.primaryGradient}
+            >
+              {completing ? (
+                <ActivityIndicator color={colors.onSecondary} />
+              ) : (
+                <>
+                  <MaterialIcons name="check-circle" size={22} color={colors.onSecondary} />
+                  <Text style={styles.primaryText}>Mark bill completed</Text>
+                </>
+              )}
+            </LinearGradient>
+          </TouchableOpacity>
+        ) : null}
+
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={goDashboard}
+          style={billId ? styles.secondaryBtn : styles.primaryBtn}
+        >
+          {billId ? (
+            <>
+              <MaterialIcons name="dashboard" size={20} color={colors.secondary} />
+              <Text style={styles.secondaryText}>Back to Dashboard</Text>
+            </>
+          ) : (
+            <LinearGradient
+              colors={[colors.secondary, colors.secondaryDim]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.primaryGradient}
+            >
+              <MaterialIcons name="dashboard" size={22} color={colors.onSecondary} />
+              <Text style={styles.primaryText}>Back to Dashboard</Text>
+            </LinearGradient>
+          )}
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -342,5 +429,24 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: colors.onSecondary,
+  },
+  primaryBtnDisabled: {
+    opacity: 0.6,
+  },
+  secondaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 16,
+    borderRadius: radii.xl,
+    backgroundColor: 'transparent',
+    marginTop: 12,
+  },
+  secondaryText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.secondary,
   },
 });

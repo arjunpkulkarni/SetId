@@ -225,8 +225,12 @@ function BottomNavBar({ insets }) {
   );
 }
 
-export default function ActivityDetailScreen({ navigation }) {
+export default function ActivityDetailScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
+  // Forward the bill id into FundsCollected so it can offer a
+  // "Mark bill completed" button. Missing billId is OK — the target
+  // screen degrades to a plain "Back to Dashboard" flow.
+  const billId = route?.params?.billId;
 
   return (
     <View style={styles.root}>
@@ -243,7 +247,11 @@ export default function ActivityDetailScreen({ navigation }) {
         <BillHeader />
         <ProgressCard />
         <ParticipantSection />
-        <CashCallout onMarkPaid={() => navigation.navigate('FundsCollected')} />
+        <CashCallout
+          onMarkPaid={() =>
+            navigation.navigate('FundsCollected', billId ? { billId } : undefined)
+          }
+        />
       </ScrollView>
 
       <BottomNavBar insets={insets} />
