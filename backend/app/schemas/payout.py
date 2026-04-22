@@ -47,6 +47,7 @@ class ConnectStatusOut(BaseModel):
     external_account_last4: str | None = None
     external_account_brand: str | None = None
     requirements_due: list[str] = Field(default_factory=list)
+    requirements_past_due: list[str] = Field(default_factory=list)
     disabled_reason: str | None = None
 
 

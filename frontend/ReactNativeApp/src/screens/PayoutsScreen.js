@@ -45,6 +45,38 @@ const STATUS_META = {
   canceled: { label: 'Canceled', color: colors.onSurfaceVariant, icon: 'cancel' },
 };
 
+/**
+ * Translate a Stripe `requirements.currently_due` / `past_due` key into
+ * a sentence the host can act on. Covers the common items we see on
+ * Custom accounts in practice. Unknown keys fall back to the raw path
+ * so we never silently hide a requirement.
+ */
+function describeRequirement(key) {
+  const map = {
+    'external_account': 'Add a debit card for payouts.',
+    'individual.verification.document': 'Upload a photo of your ID.',
+    'individual.verification.additional_document': 'Upload an additional document (utility bill or bank statement).',
+    'individual.id_number': 'Provide your full SSN.',
+    'individual.ssn_last_4': 'Provide the last 4 of your SSN.',
+    'individual.first_name': 'Provide your first name.',
+    'individual.last_name': 'Provide your last name.',
+    'individual.dob.day': 'Provide your date of birth.',
+    'individual.dob.month': 'Provide your date of birth.',
+    'individual.dob.year': 'Provide your date of birth.',
+    'individual.address.line1': 'Provide your street address.',
+    'individual.address.city': 'Provide your city.',
+    'individual.address.state': 'Provide your state.',
+    'individual.address.postal_code': 'Provide your ZIP code.',
+    'individual.phone': 'Provide your phone number.',
+    'individual.email': 'Provide your email address.',
+    'tos_acceptance.date': 'Re-accept the Stripe terms.',
+    'tos_acceptance.ip': 'Re-accept the Stripe terms.',
+    'business_profile.url': 'Add a business website.',
+    'business_profile.mcc': 'Select a business category.',
+  };
+  return map[key] || key;
+}
+
 export default function PayoutsScreen({ navigation }) {
   const insets = useSafeAreaInsets();
 
@@ -199,6 +231,12 @@ export default function PayoutsScreen({ navigation }) {
     }
 
     if (!status.payouts_enabled) {
+      // Prefer `past_due` (account is blocked) over `currently_due` (soon-
+      // due) when building the human-readable list. Fall back to the
+      // generic disabled_reason only if we have neither.
+      const blocking = Array.isArray(status.requirements_past_due) && status.requirements_past_due.length > 0
+        ? status.requirements_past_due
+        : Array.isArray(status.requirements_due) ? status.requirements_due : [];
       return (
         <View style={[styles.statusCard, styles.statusCardPending, shadows.card]}>
           <View style={styles.statusIconWrap}>
@@ -206,11 +244,27 @@ export default function PayoutsScreen({ navigation }) {
           </View>
           <View style={styles.statusTextCol}>
             <Text style={styles.statusTitle}>Verification pending</Text>
-            <Text style={styles.statusSubtitle}>
-              {status.disabled_reason
-                ? `Stripe needs: ${status.disabled_reason}.`
-                : 'Your account needs attention before payouts can run.'}
-            </Text>
+            {blocking.length > 0 ? (
+              <>
+                <Text style={styles.statusSubtitle}>
+                  Stripe still needs:
+                </Text>
+                {blocking.slice(0, 4).map((req) => (
+                  <Text key={req} style={styles.statusRequirement}>
+                    • {describeRequirement(req)}
+                  </Text>
+                ))}
+                {blocking.length > 4 && (
+                  <Text style={styles.statusRequirement}>
+                    + {blocking.length - 4} more
+                  </Text>
+                )}
+              </>
+            ) : (
+              <Text style={styles.statusSubtitle}>
+                Your account needs attention before payouts can run.
+              </Text>
+            )}
           </View>
         </View>
       );
@@ -500,6 +554,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.onSurfaceVariant,
     marginTop: 2,
+    lineHeight: 18,
+  },
+  statusRequirement: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: colors.onSurface,
+    marginTop: 3,
     lineHeight: 18,
   },
 

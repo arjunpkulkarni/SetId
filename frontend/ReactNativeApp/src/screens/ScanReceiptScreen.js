@@ -463,7 +463,6 @@ export default function ScanReceiptScreen({ navigation, route }) {
                 end={{ x: 1, y: 1 }}
                 style={styles.actionGradient}
               >
-                <MaterialIcons name="auto-awesome" size={20} color={colors.onSecondary} />
                 <Text style={styles.actionTextPrimary}>
                   {queuedImages.length > 1
                     ? `Process ${queuedImages.length} Pages`

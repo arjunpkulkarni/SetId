@@ -64,7 +64,12 @@ class ConnectedAccountStatus:
     has_instant_external_account: bool
     external_account_last4: Optional[str]
     external_account_brand: Optional[str]
+    # Stripe's requirement buckets, surfaced separately so the UI can
+    # distinguish "needs attention soon" (currently_due) from "already
+    # overdue, account disabled" (past_due). Each entry is a Stripe key
+    # like "individual.verification.document" or "external_account".
     requirements_due: list[str]
+    requirements_past_due: list[str]
     disabled_reason: Optional[str]
 
 
@@ -336,6 +341,7 @@ class StripeConnectService:
                 external_account_last4=None,
                 external_account_brand=None,
                 requirements_due=[],
+                requirements_past_due=[],
                 disabled_reason=None,
             )
 
@@ -350,10 +356,13 @@ class StripeConnectService:
         charges = bool(account.charges_enabled)
         payouts = bool(account.payouts_enabled)
         details = bool(account.details_submitted)
-        requirements = list(
-            (account.requirements or {}).get("currently_due") or []
-        )
-        disabled_reason = (account.requirements or {}).get("disabled_reason")
+        req_obj = account.requirements or {}
+        # `currently_due` = items Stripe wants eventually (account still works)
+        # `past_due`     = items overdue, account is DISABLED until resolved
+        # We surface both so the UI can render the right message.
+        currently_due = list(req_obj.get("currently_due") or [])
+        past_due = list(req_obj.get("past_due") or [])
+        disabled_reason = req_obj.get("disabled_reason")
 
         has_instant, last4, brand = self._inspect_external_accounts(
             user.stripe_account_id
@@ -374,7 +383,8 @@ class StripeConnectService:
             has_instant_external_account=has_instant,
             external_account_last4=last4,
             external_account_brand=brand,
-            requirements_due=requirements,
+            requirements_due=currently_due,
+            requirements_past_due=past_due,
             disabled_reason=disabled_reason,
         )
 
