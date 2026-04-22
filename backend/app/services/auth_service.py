@@ -177,7 +177,25 @@ class AuthService:
                 raise ValueError("PHONE_ALREADY_REGISTERED")
             if not display:
                 raise ValueError("NAME_REQUIRED")
+
+            # The signup subject is normally deterministic (phone -> UUID via
+            # uuid5) so verify-otp and create-profile agree on the user id
+            # without a round-trip. But if this phone was ever used by an
+            # account that was later soft-deleted, the deterministic UUID
+            # now points at a tombstone row (is_active=False,
+            # full_name="Deleted User", phone=None). Reusing that subject
+            # would cause create-profile to short-circuit on the tombstone
+            # and hand back a token for an inactive user — every subsequent
+            # authenticated call then 404s with PROFILE_NOT_FOUND.
+            #
+            # Detect the collision and fall back to a fresh random UUID so
+            # the new signup gets a clean row, while the tombstone stays
+            # put to preserve historical FK references (bills/payments the
+            # deleted user was part of remain consistent for other members).
             subject = _subject_uuid_from_phone(phone_e164)
+            if self.db.query(User).filter(User.id == subject).first() is not None:
+                subject = uuid.uuid4()
+
             token = create_access_token(
                 str(subject),
                 extra_claims={
