@@ -208,6 +208,7 @@ class StripeConnectService:
         individual: dict,
         card_token: str,
         client_ip: str,
+        payment_method_id: Optional[str] = None,
     ) -> ConnectedAccountStatus:
         """Complete in-app onboarding in a single call.
 
@@ -319,7 +320,53 @@ class StripeConnectService:
             },
         )
 
+        # If the client also sent a PaymentMethod id (same physical card,
+        # separately tokenized), attach it to the user's Stripe Customer
+        # so the same debit card works for CHARGING them (paying a bill
+        # as a guest). Without this, the user would have to re-add their
+        # card through the separate "Add Payment Method" flow. Failures
+        # here are non-fatal — Connect setup is the primary goal; the
+        # payment-method sync is convenience and can be redone later.
+        if payment_method_id:
+            try:
+                self._sync_payment_method_to_customer(user, payment_method_id)
+            except Exception:
+                logger.exception(
+                    "stripe_connect_payment_method_sync_failed",
+                    extra={
+                        "user_id": str(user.id),
+                        "payment_method_id": payment_method_id,
+                    },
+                )
+
         return self.refresh_account_status(user)
+
+    def _sync_payment_method_to_customer(
+        self, user: User, payment_method_id: str
+    ) -> None:
+        """Attach a `pm_...` to the user's Stripe Customer and save it in
+        our `payment_methods` table so it shows up alongside any other
+        cards the user has added.
+
+        Delegates to `PaymentMethodService.attach_payment_method` which
+        already handles: customer creation, idempotent re-attach, and
+        the local row insert. Keeps this service focused on Connect and
+        avoids duplicating card-metadata extraction logic.
+        """
+        # Import here to avoid a circular import at module-load time
+        # (payment_method_service doesn't depend on Connect, but pulling
+        # it at the top would widen our import surface for no reason).
+        from app.services.payment_method_service import PaymentMethodService
+
+        svc = PaymentMethodService(self.db)
+        svc.attach_payment_method(user, payment_method_id)
+        logger.info(
+            "stripe_connect_payment_method_synced",
+            extra={
+                "user_id": str(user.id),
+                "payment_method_id": payment_method_id,
+            },
+        )
 
     def refresh_account_status(self, user: User) -> ConnectedAccountStatus:
         """Pull the authoritative account state from Stripe, cache the

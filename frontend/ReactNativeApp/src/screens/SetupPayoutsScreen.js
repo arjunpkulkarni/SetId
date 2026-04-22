@@ -71,7 +71,7 @@ function LabeledField({
 export default function SetupPayoutsScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { createToken } = useStripe();
+  const { createToken, createPaymentMethod } = useStripe();
 
   // Load the full profile once so we can pre-fill name + phone. The auth
   // context only carries the bare user summary.
@@ -192,12 +192,14 @@ export default function SetupPayoutsScreen({ navigation }) {
 
     setSubmitting(true);
     try {
-      // 1) Tokenize the debit card. Passing `currency: 'usd'` makes this a
-      // Connect external-account-eligible token (vs a regular card token
-      // for charging). The raw PAN never leaves the device.
+      // 1) Tokenize the debit card as a Connect external-account token.
+      //    Passing `currency: 'usd'` tags it for use on a Connect account
+      //    (vs. a plain card token for charging). The raw PAN never
+      //    leaves the device.
+      const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
       const { token, error: tokenError } = await createToken({
         type: 'Card',
-        name: `${firstName.trim()} ${lastName.trim()}`.trim(),
+        name: fullName,
         currency: 'usd',
       });
       if (tokenError) {
@@ -214,9 +216,39 @@ export default function SetupPayoutsScreen({ navigation }) {
         return;
       }
 
-      // 2) Submit identity + token to the backend. The server creates (or
-      //    reuses) the Custom account, sets identity, attaches the card,
-      //    and accepts the Stripe ToS on behalf of the user.
+      // 2) ALSO create a reusable PaymentMethod from the same card input.
+      //    This is what the platform's Stripe Customer will charge when
+      //    the user pays for a bill as a guest. Without this, the user
+      //    would have to re-add their card via the separate "Add Payment
+      //    Method" flow — same card, duplicate work.
+      //
+      //    Non-fatal: if this fails we still complete payout setup and
+      //    the user can add a payment method later via the old flow.
+      let paymentMethodId = null;
+      try {
+        const { paymentMethod, error: pmError } = await createPaymentMethod({
+          paymentMethodType: 'Card',
+          paymentMethodData: {
+            billingDetails: {
+              name: fullName,
+              email: email.trim() || undefined,
+              phone: phone.trim() || undefined,
+            },
+          },
+        });
+        if (!pmError && paymentMethod?.id) {
+          paymentMethodId = paymentMethod.id;
+        }
+      } catch (pmErr) {
+        if (__DEV__) console.warn('[SetupPayouts] createPaymentMethod failed', pmErr);
+      }
+
+      // 3) Submit identity + token (+ optional PM id) to the backend. The
+      //    server creates (or reuses) the Custom account, sets identity,
+      //    attaches the card as external account, accepts the Stripe ToS,
+      //    and — if paymentMethodId is present — also attaches the PM to
+      //    the user's Stripe Customer so the same card works for
+      //    charging them when they pay a bill.
       await stripeConnect.setupPayouts({
         individual: {
           first_name: firstName.trim(),
@@ -233,6 +265,7 @@ export default function SetupPayoutsScreen({ navigation }) {
           ssn_last_4: digitsOnly(ssnLast4),
         },
         card_token: token.id,
+        payment_method_id: paymentMethodId,
       });
 
       Alert.alert(

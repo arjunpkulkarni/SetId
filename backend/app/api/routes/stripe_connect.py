@@ -90,6 +90,7 @@ def submit_payout_setup(
             individual=body.individual.model_dump(),
             card_token=body.card_token,
             client_ip=client_ip,
+            payment_method_id=body.payment_method_id,
         )
     except StripeConnectError as e:
         return _to_error(e)

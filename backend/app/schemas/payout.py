@@ -98,8 +98,19 @@ class PayoutsSetupRequest(BaseModel):
 
     `card_token` is a `tok_...` string returned by the Stripe React
     Native SDK's `createToken({ type: 'Card', currency: 'usd', ... })`.
+    Attached as the external account on the host's Connect account.
+
+    `payment_method_id` is an optional `pm_...` for the SAME card,
+    created via `createPaymentMethod({ paymentMethodType: 'Card' })`.
+    When present, the server also attaches it to the user's Stripe
+    Customer so the same card works for paying bills — no redundant
+    second "add payment method" step.
+
     The raw card number never leaves the phone.
     """
 
     individual: PayoutsSetupIndividual
     card_token: str = Field(..., min_length=1, max_length=100)
+    payment_method_id: str | None = Field(
+        default=None, min_length=1, max_length=100
+    )
