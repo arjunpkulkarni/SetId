@@ -435,27 +435,28 @@ export default function BillSplitScreen({ navigation, route }) {
 
     setSaving(true);
     try {
-      // Gate: the HOST needs a Connect account with payouts enabled, not a
-      // Customer-side payment method. Customer PMs are for charging guests;
-      // Connect payouts are how the host receives those charges. A host
-      // without a payout destination would collect nothing when guests pay.
+      // Gate: the HOST needs a Connect account with payouts enabled and a
+      // debit card on file as the payout destination. Customer-side PMs
+      // are for charging guests; Connect external accounts are how the
+      // host receives those charges. Daily payouts (not instant) — so we
+      // don't require `has_instant_external_account` here.
       const statusRes = await stripeConnect.getStatus();
       const s = statusRes?.data ?? {};
       const ready = !!(
         s.connected
         && s.payouts_enabled
-        && s.has_instant_external_account
+        && s.external_account_last4
       );
 
       if (!ready) {
         setSaving(false);
         Alert.alert(
-          'Set up payouts',
-          'Add a debit card to receive your share before sending this bill to the group.',
+          'Add a payout method',
+          "You need a payout method on file before we can send you your share. Takes about a minute.",
           [
-            { text: 'Cancel', style: 'cancel' },
+            { text: 'Not now', style: 'cancel' },
             {
-              text: 'Set up',
+              text: 'Add',
               onPress: () => navigation.navigate('SetupPayouts'),
             },
           ],

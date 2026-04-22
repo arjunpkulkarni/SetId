@@ -1,5 +1,6 @@
 """
-Stripe Connect — Express connected accounts + instant payouts to debit cards.
+Stripe Connect — Custom connected accounts + automatic daily payouts to
+debit cards.
 
 This is the ONE place we talk to Stripe in the Connect context. Every call
 that touches a connected account passes `stripe_account=acct_id` so Stripe
@@ -12,21 +13,24 @@ Money flow this service enables:
     Web/mobile guest card
         └─▶ PaymentIntent (created by PaymentService with
                             `transfer_data.destination = host_acct_id`)
-            └─▶ Host's Connect balance (`instant_available`)
-                └─▶ `Payout.create(method="instant")`  ◀── this service
-                    └─▶ Host's debit card (arrives in ~30 minutes)
+            └─▶ Host's Connect balance (`available`)
+                └─▶ Stripe's automatic daily payout runs on schedule
+                    └─▶ Host's debit card (arrives in 1–2 business days)
+
+We do NOT trigger payouts ourselves. The account's payout schedule is set
+to daily at account-creation time (see `ensure_connected_account`), so
+Stripe issues payouts automatically — the app only surfaces pending
+balance + arrival date.
 
 Fees (out of our control):
   - Stripe's per-PaymentIntent fee (~2.9% + $0.30 US) — deducted before
     funds land in host's Connect balance.
-  - Stripe's instant payout fee (~1.75% per payout, $0.50 min) — deducted
-    before funds land on the host's debit card.
+  - No instant-payout fee (daily standard payouts are free).
   - Our `application_fee_amount` on the PaymentIntent (see
     `PaymentService` + `settings.PLATFORM_FEE_BPS`) — the platform's cut.
 """
 
 import logging
-import secrets
 from dataclasses import dataclass
 from typing import Optional
 
@@ -175,6 +179,20 @@ class StripeConnectService:
                     "transfers": {"requested": True},
                 },
                 business_type="individual",
+                # Pin the payout schedule to automatic daily so Stripe runs
+                # payouts for us on the minimum available delay. We never
+                # trigger `Payout.create` ourselves — the app only reads
+                # balance + listPayouts for display. `delay_days=minimum`
+                # uses whatever Stripe's country-specific minimum is
+                # (typically 2 business days in the US).
+                settings={
+                    "payouts": {
+                        "schedule": {
+                            "interval": "daily",
+                            "delay_days": "minimum",
+                        }
+                    }
+                },
                 business_profile={
                     "product_description": (
                         "Settld bill-splitting: receives funds from guests "
@@ -369,13 +387,16 @@ class StripeConnectService:
         )
 
     def refresh_account_status(self, user: User) -> ConnectedAccountStatus:
-        """Pull the authoritative account state from Stripe, cache the
-        booleans locally, and inspect external accounts for instant-payout
-        eligibility.
+        """Pull the authoritative account state from Stripe and cache the
+        booleans locally.
+
+        `has_instant_external_account` is still populated for informational
+        purposes (in case we ever re-enable instant payouts), but nothing
+        gates on it any more — payouts run automatically on the daily
+        schedule regardless of instant eligibility.
 
         Called from:
           - GET /stripe/connect/status (user is checking their onboarding)
-          - create_instant_payout (validation)
           - Connect webhook handler (after `account.updated`)
         """
         if not user.stripe_account_id:
@@ -435,21 +456,80 @@ class StripeConnectService:
             disabled_reason=disabled_reason,
         )
 
+    def replace_external_account(
+        self, user: User, *, card_token: str
+    ) -> ConnectedAccountStatus:
+        """Swap the user's payout card without re-running KYC.
+
+        Used by the "Change card on file" flow — the user has a Custom
+        account already, identity is on file, they just want to point
+        future payouts at a new debit card. We:
+
+          1. Attach the new card as an external account with
+             `default_for_currency=True` so subsequent payouts route to
+             it immediately.
+          2. Stripe auto-demotes the previously-default card for the
+             same currency, so we don't need to `default_for_currency`-
+             flip anything else. We also don't delete the old card — if
+             the user wants to go back to it they'll add it again; no
+             stored cleanup risk if the new attach fails midway.
+
+        Requires the account to already exist. If for some reason we're
+        called on a user without one, we fall through to
+        `ensure_connected_account` which just creates the skeleton; the
+        attach then succeeds (though the user is now in a weird "card
+        attached but identity never submitted" state — this path isn't
+        a normal entry point, so that's acceptable).
+        """
+        account_id = self.ensure_connected_account(user)
+
+        try:
+            ext = stripe.Account.create_external_account(
+                account_id,
+                external_account=card_token,
+                default_for_currency=True,
+            )
+        except stripe.error.CardError as e:
+            raise StripeConnectError(
+                "CARD_DECLINED", self._safe_stripe_message(e)
+            )
+        except stripe.error.InvalidRequestError as e:
+            raise StripeConnectError(
+                "INVALID_CARD", self._safe_stripe_message(e)
+            )
+        except stripe.error.StripeError as e:
+            logger.exception("stripe_connect_external_account_replace_failed")
+            raise StripeConnectError(
+                "STRIPE_ERROR", self._safe_stripe_message(e)
+            )
+
+        logger.info(
+            "stripe_connect_external_account_replaced",
+            extra={
+                "user_id": str(user.id),
+                "account_id": account_id,
+                "external_account_id": getattr(ext, "id", None),
+            },
+        )
+
+        return self.refresh_account_status(user)
+
     # ─── Balance + payouts ───────────────────────────────────────────────
 
-    def get_instant_available_cents(
+    def get_available_cents(
         self, user: User, currency: str = "usd"
     ) -> int:
-        """Sum of balances eligible for instant payout, in cents.
+        """Balance eligible for the next scheduled daily payout, in cents.
 
-        This is the `instant_available` bucket — different from `available`
-        which is the standard (ACH) bucket. Stripe separates them because
-        not every transaction becomes instantly-payable-out immediately.
+        Reads the `available` bucket (money that has cleared Stripe's
+        transaction-level holds and will go out on the account's daily
+        payout schedule). This is NOT `instant_available`; we no longer
+        run instant payouts.
         """
         if not user.stripe_account_id:
             raise StripeConnectError(
                 "NOT_CONNECTED",
-                "Set up payouts before checking your balance.",
+                "Add a payout method before checking your balance.",
             )
         try:
             balance = stripe.Balance.retrieve(
@@ -461,119 +541,10 @@ class StripeConnectService:
             )
 
         total = 0
-        for entry in balance.instant_available or []:
+        for entry in balance.available or []:
             if entry.currency == currency:
                 total += int(entry.amount)
         return total
-
-    def create_instant_payout(
-        self,
-        user: User,
-        *,
-        amount_cents: int,
-        currency: str = "usd",
-    ) -> Payout:
-        """Kick off an instant payout on the user's connected account.
-
-        Validates amount, onboarding state, and external-account
-        eligibility BEFORE calling Stripe so we can return clean,
-        actionable error codes to the mobile app.
-        """
-        currency = currency.lower()
-
-        if amount_cents <= 0:
-            raise StripeConnectError("INVALID_AMOUNT", "Amount must be positive.")
-        # Stripe's hard minimum for USD payouts is $0.50; enforce locally
-        # so the UX error is immediate, not a 400 from Stripe.
-        if amount_cents < 50:
-            raise StripeConnectError(
-                "AMOUNT_TOO_SMALL",
-                "Minimum payout is $0.50.",
-            )
-
-        status = self.refresh_account_status(user)
-        if not status.connected:
-            raise StripeConnectError(
-                "NOT_CONNECTED",
-                "Set up payouts before cashing out.",
-            )
-        if not status.details_submitted:
-            raise StripeConnectError(
-                "HOST_NOT_ONBOARDED",
-                "Finish Stripe verification before cashing out.",
-            )
-        if not status.payouts_enabled:
-            raise StripeConnectError(
-                "PAYOUTS_TEMPORARILY_DISABLED",
-                "Your Stripe account needs attention before payouts can run.",
-            )
-        if not status.has_instant_external_account:
-            raise StripeConnectError(
-                "EXTERNAL_ACCOUNT_NOT_INSTANT_CAPABLE",
-                "Add a debit card that supports instant payouts.",
-            )
-
-        instant_balance = self.get_instant_available_cents(user, currency=currency)
-        if amount_cents > instant_balance:
-            raise StripeConnectError(
-                "INSUFFICIENT_INSTANT_BALANCE",
-                f"Only ${instant_balance / 100:.2f} is available for instant payout.",
-            )
-
-        idempotency_key = f"payout_{user.id}_{secrets.token_hex(8)}"
-        try:
-            stripe_payout = stripe.Payout.create(
-                amount=amount_cents,
-                currency=currency,
-                method="instant",
-                # We don't pass `destination` — Stripe routes to the default
-                # external account on the connected account, which is the
-                # card the user added during onboarding. If they later add
-                # multiple cards, the default is still picked automatically.
-                metadata={"user_id": str(user.id)},
-                stripe_account=user.stripe_account_id,
-                idempotency_key=idempotency_key,
-            )
-        except stripe.error.InvalidRequestError as e:
-            logger.warning(
-                "stripe_connect_payout_invalid",
-                extra={
-                    "account_id": user.stripe_account_id,
-                    "error": str(e),
-                },
-            )
-            raise StripeConnectError(
-                "PAYOUT_INVALID", self._safe_stripe_message(e)
-            )
-        except stripe.error.StripeError as e:
-            logger.exception("stripe_connect_payout_failed")
-            raise StripeConnectError(
-                "STRIPE_ERROR", self._safe_stripe_message(e)
-            )
-
-        payout = Payout(
-            user_id=user.id,
-            stripe_payout_id=stripe_payout.id,
-            stripe_account_id=user.stripe_account_id,
-            amount_cents=amount_cents,
-            currency=currency,
-            status=stripe_payout.status,
-            method=stripe_payout.method or "instant",
-            arrival_date=stripe_payout.arrival_date,
-        )
-        self.db.add(payout)
-        self.db.commit()
-        self.db.refresh(payout)
-        logger.info(
-            "stripe_connect_payout_created",
-            extra={
-                "user_id": str(user.id),
-                "payout_id": stripe_payout.id,
-                "amount_cents": amount_cents,
-                "status": stripe_payout.status,
-            },
-        )
-        return payout
 
     def list_payouts(self, user: User, limit: int = 20) -> list[Payout]:
         return (

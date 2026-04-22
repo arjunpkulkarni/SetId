@@ -6,15 +6,6 @@ from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
-class PayoutCreate(BaseModel):
-    """Payload for `POST /stripe/connect/payouts`."""
-
-    amount_cents: int = Field(
-        ..., ge=50, description="Amount in smallest currency unit. Min 50 cents."
-    )
-    currency: str = Field("usd", min_length=3, max_length=3)
-
-
 class PayoutOut(BaseModel):
     id: uuid.UUID
     stripe_payout_id: str
@@ -52,7 +43,11 @@ class ConnectStatusOut(BaseModel):
 
 
 class BalanceOut(BaseModel):
-    instant_available_cents: int
+    """Pending balance — the amount that will go out in the next
+    automatic daily payout. Not instant-payable; we no longer run
+    instant payouts."""
+
+    available_cents: int
     currency: str = "usd"
 
 
@@ -90,6 +85,19 @@ class PayoutsSetupIndividual(BaseModel):
     @classmethod
     def _state_upper(cls, v: str) -> str:
         return v.strip().upper()
+
+
+class ExternalAccountUpdateRequest(BaseModel):
+    """Body of `POST /stripe/connect/external-account` — the "change
+    card on file" flow. Expects only a card token; identity has already
+    been submitted during the initial payout-method setup.
+
+    `card_token` is a `tok_...` from the Stripe React Native SDK's
+    `createToken({ type: 'Card', currency: 'usd', ... })`. The raw card
+    number never leaves the phone.
+    """
+
+    card_token: str = Field(..., min_length=1, max_length=100)
 
 
 class PayoutsSetupRequest(BaseModel):

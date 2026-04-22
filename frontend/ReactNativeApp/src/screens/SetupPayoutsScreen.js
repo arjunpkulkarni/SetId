@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -35,22 +35,37 @@ function splitName(fullName) {
   return { first: parts[0], last: parts.slice(1).join(' ') };
 }
 
-function LabeledField({
-  label,
-  value,
-  onChangeText,
-  placeholder,
-  keyboardType = 'default',
-  autoCapitalize = 'words',
-  maxLength,
-  autoCorrect = false,
-  secureTextEntry = false,
-  style,
-}) {
+// Exposes `textContentType` (iOS) and `autoComplete` (Android) so the
+// system QuickType bar / autofill chip can fill values straight from
+// Contacts / Keychain. Also forwards a ref + `returnKeyType` +
+// `onSubmitEditing` so callers can chain focus between fields and let
+// "next" on the keyboard jump to the following input without the user
+// tapping around.
+const LabeledField = React.forwardRef(function LabeledField(
+  {
+    label,
+    value,
+    onChangeText,
+    placeholder,
+    keyboardType = 'default',
+    autoCapitalize = 'words',
+    maxLength,
+    autoCorrect = false,
+    secureTextEntry = false,
+    textContentType,
+    autoComplete,
+    returnKeyType,
+    onSubmitEditing,
+    blurOnSubmit,
+    style,
+  },
+  ref,
+) {
   return (
     <View style={[styles.field, style]}>
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput
+        ref={ref}
         style={styles.input}
         value={value}
         onChangeText={onChangeText}
@@ -61,10 +76,15 @@ function LabeledField({
         autoCorrect={autoCorrect}
         maxLength={maxLength}
         secureTextEntry={secureTextEntry}
+        textContentType={textContentType}
+        autoComplete={autoComplete}
+        returnKeyType={returnKeyType}
+        onSubmitEditing={onSubmitEditing}
+        blurOnSubmit={blurOnSubmit}
       />
     </View>
   );
-}
+});
 
 // ─── Screen ─────────────────────────────────────────────────────────────────
 
@@ -96,6 +116,41 @@ export default function SetupPayoutsScreen({ navigation }) {
 
   const [cardComplete, setCardComplete] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Refs used to auto-advance the keyboard between related fields so the
+  // user never has to tap between MM/DD/YYYY or between name fields.
+  const lastNameRef = useRef(null);
+  const emailRef = useRef(null);
+  const phoneRef = useRef(null);
+  const dobMonthRef = useRef(null);
+  const dobDayRef = useRef(null);
+  const dobYearRef = useRef(null);
+  const addressLine1Ref = useRef(null);
+  const addressCityRef = useRef(null);
+  const addressStateRef = useRef(null);
+  const addressZipRef = useRef(null);
+  const ssnRef = useRef(null);
+
+  // Hit the free zippopotam.us endpoint to fill city + state once the
+  // user has typed a 5-digit ZIP. Only fills blanks — we never overwrite
+  // something the user already typed. Non-fatal on network failure; the
+  // fields remain editable so typing still works.
+  const autofillFromZip = async (zip) => {
+    if (zip.length !== 5) return;
+    try {
+      const res = await fetch(`https://api.zippopotam.us/us/${zip}`);
+      if (!res.ok) return;
+      const json = await res.json();
+      const place = json?.places?.[0];
+      if (!place) return;
+      setAddressCity((prev) => (prev.trim() ? prev : place['place name'] ?? ''));
+      setAddressState((prev) =>
+        prev.trim() ? prev : String(place['state abbreviation'] ?? '').toUpperCase(),
+      );
+    } catch {
+      // Offline / rate limited — user can still type manually.
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -269,8 +324,8 @@ export default function SetupPayoutsScreen({ navigation }) {
       });
 
       Alert.alert(
-        'Payouts set up',
-        'Your debit card is ready to receive instant payouts.',
+        "You're all set",
+        "Payout method saved. We'll send funds automatically when your group pays.",
         [
           {
             text: 'Done',
@@ -288,8 +343,8 @@ export default function SetupPayoutsScreen({ navigation }) {
       // Friendly copy for the most common rejection reasons.
       if (code === 'INVALID_CARD') {
         Alert.alert(
-          'Unsupported card',
-          'Stripe only accepts US debit cards for instant payouts. Try a different card.',
+          'Card not supported',
+          "This card can't be used as a payout method. Try a US debit card.",
         );
       } else if (code === 'CARD_DECLINED') {
         Alert.alert('Card declined', message);
@@ -327,7 +382,7 @@ export default function SetupPayoutsScreen({ navigation }) {
         >
           <MaterialIcons name="arrow-back" size={24} color={colors.onSurface} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Set up payouts</Text>
+        <Text style={styles.headerTitle}>Payout method</Text>
         <View style={styles.backBtn} />
       </View>
 
@@ -340,8 +395,8 @@ export default function SetupPayoutsScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.intro}>
-          Add a debit card to receive your share of the bill. This is
-          processed by Stripe — your card details never touch our servers.
+          Add a payout method so we can send you your share when your group
+          pays. Handled by Stripe — your card info never touches our servers.
         </Text>
 
         {/* Identity ------------------------------------------------------ */}
@@ -353,31 +408,54 @@ export default function SetupPayoutsScreen({ navigation }) {
               value={firstName}
               onChangeText={setFirstName}
               placeholder="Jane"
+              textContentType="givenName"
+              autoComplete="name-given"
+              returnKeyType="next"
+              onSubmitEditing={() => lastNameRef.current?.focus()}
+              blurOnSubmit={false}
               style={styles.rowHalf}
             />
             <LabeledField
+              ref={lastNameRef}
               label="Last name"
               value={lastName}
               onChangeText={setLastName}
               placeholder="Doe"
+              textContentType="familyName"
+              autoComplete="name-family"
+              returnKeyType="next"
+              onSubmitEditing={() => emailRef.current?.focus()}
+              blurOnSubmit={false}
               style={styles.rowHalf}
             />
           </View>
           <LabeledField
+            ref={emailRef}
             label="Email"
             value={email}
             onChangeText={setEmail}
             placeholder="you@example.com"
             keyboardType="email-address"
             autoCapitalize="none"
+            textContentType="emailAddress"
+            autoComplete="email"
+            returnKeyType="next"
+            onSubmitEditing={() => phoneRef.current?.focus()}
+            blurOnSubmit={false}
           />
           <LabeledField
+            ref={phoneRef}
             label="Phone"
             value={phone}
             onChangeText={setPhone}
             placeholder="+1 415 555 1234"
             keyboardType="phone-pad"
             autoCapitalize="none"
+            textContentType="telephoneNumber"
+            autoComplete="tel"
+            returnKeyType="next"
+            onSubmitEditing={() => dobMonthRef.current?.focus()}
+            blurOnSubmit={false}
           />
         </View>
 
@@ -386,27 +464,42 @@ export default function SetupPayoutsScreen({ navigation }) {
         <View style={[styles.card, shadows.card]}>
           <View style={styles.row3}>
             <LabeledField
+              ref={dobMonthRef}
               label="MM"
               value={dobMonth}
-              onChangeText={(v) => setDobMonth(digitsOnly(v).slice(0, 2))}
+              onChangeText={(v) => {
+                const digits = digitsOnly(v).slice(0, 2);
+                setDobMonth(digits);
+                if (digits.length === 2) dobDayRef.current?.focus();
+              }}
               placeholder="MM"
               keyboardType="number-pad"
               maxLength={2}
               style={styles.rowSmall}
             />
             <LabeledField
+              ref={dobDayRef}
               label="DD"
               value={dobDay}
-              onChangeText={(v) => setDobDay(digitsOnly(v).slice(0, 2))}
+              onChangeText={(v) => {
+                const digits = digitsOnly(v).slice(0, 2);
+                setDobDay(digits);
+                if (digits.length === 2) dobYearRef.current?.focus();
+              }}
               placeholder="DD"
               keyboardType="number-pad"
               maxLength={2}
               style={styles.rowSmall}
             />
             <LabeledField
+              ref={dobYearRef}
               label="YYYY"
               value={dobYear}
-              onChangeText={(v) => setDobYear(digitsOnly(v).slice(0, 4))}
+              onChangeText={(v) => {
+                const digits = digitsOnly(v).slice(0, 4);
+                setDobYear(digits);
+                if (digits.length === 4) addressLine1Ref.current?.focus();
+              }}
               placeholder="YYYY"
               keyboardType="number-pad"
               maxLength={4}
@@ -419,19 +512,41 @@ export default function SetupPayoutsScreen({ navigation }) {
         <Text style={styles.sectionLabel}>Address</Text>
         <View style={[styles.card, shadows.card]}>
           <LabeledField
+            ref={addressLine1Ref}
             label="Street"
             value={addressLine1}
             onChangeText={setAddressLine1}
             placeholder="123 Market St"
+            textContentType="streetAddressLine1"
+            autoComplete="street-address"
+            returnKeyType="next"
+            onSubmitEditing={() => addressZipRef.current?.focus()}
+            blurOnSubmit={false}
           />
-          <LabeledField
-            label="City"
-            value={addressCity}
-            onChangeText={setAddressCity}
-            placeholder="San Francisco"
-          />
+          {/* ZIP is moved before City/State because filling ZIP first lets
+              us autofill the other two via zippopotam.us. */}
           <View style={styles.row2}>
             <LabeledField
+              ref={addressZipRef}
+              label="ZIP"
+              value={addressPostalCode}
+              onChangeText={(v) => {
+                const digits = digitsOnly(v).slice(0, 5);
+                setAddressPostalCode(digits);
+                if (digits.length === 5) autofillFromZip(digits);
+              }}
+              placeholder="94103"
+              keyboardType="number-pad"
+              maxLength={5}
+              textContentType="postalCode"
+              autoComplete="postal-code"
+              returnKeyType="next"
+              onSubmitEditing={() => addressCityRef.current?.focus()}
+              blurOnSubmit={false}
+              style={styles.rowLarge}
+            />
+            <LabeledField
+              ref={addressStateRef}
               label="State"
               value={addressState}
               onChangeText={(v) =>
@@ -440,24 +555,33 @@ export default function SetupPayoutsScreen({ navigation }) {
               placeholder="CA"
               autoCapitalize="characters"
               maxLength={2}
+              textContentType="addressState"
+              autoComplete="postal-address-region"
+              returnKeyType="next"
+              onSubmitEditing={() => ssnRef.current?.focus()}
+              blurOnSubmit={false}
               style={styles.rowSmall}
             />
-            <LabeledField
-              label="ZIP"
-              value={addressPostalCode}
-              onChangeText={(v) => setAddressPostalCode(digitsOnly(v).slice(0, 5))}
-              placeholder="94103"
-              keyboardType="number-pad"
-              maxLength={5}
-              style={styles.rowLarge}
-            />
           </View>
+          <LabeledField
+            ref={addressCityRef}
+            label="City"
+            value={addressCity}
+            onChangeText={setAddressCity}
+            placeholder="San Francisco"
+            textContentType="addressCity"
+            autoComplete="postal-address-locality"
+            returnKeyType="next"
+            onSubmitEditing={() => addressStateRef.current?.focus()}
+            blurOnSubmit={false}
+          />
         </View>
 
         {/* SSN ----------------------------------------------------------- */}
         <Text style={styles.sectionLabel}>Identity verification</Text>
         <View style={[styles.card, shadows.card]}>
           <LabeledField
+            ref={ssnRef}
             label="Last 4 of SSN"
             value={ssnLast4}
             onChangeText={(v) => setSsnLast4(digitsOnly(v).slice(0, 4))}
@@ -465,15 +589,16 @@ export default function SetupPayoutsScreen({ navigation }) {
             keyboardType="number-pad"
             maxLength={4}
             secureTextEntry
+            returnKeyType="done"
           />
           <Text style={styles.helpText}>
-            Required by US law for payout accounts. Encrypted end-to-end and
-            sent directly to Stripe.
+            Required by US law for anyone receiving money through the app.
+            Encrypted end-to-end and sent directly to Stripe.
           </Text>
         </View>
 
         {/* Debit card ---------------------------------------------------- */}
-        <Text style={styles.sectionLabel}>Debit card</Text>
+        <Text style={styles.sectionLabel}>Payout method</Text>
         <View style={[styles.card, shadows.card]}>
           <CardField
             postalCodeEnabled={false}
@@ -489,8 +614,9 @@ export default function SetupPayoutsScreen({ navigation }) {
             onCardChange={(details) => setCardComplete(!!details?.complete)}
           />
           <Text style={styles.helpText}>
-            US debit cards only. Credit cards and non-US cards can't receive
-            instant payouts from Stripe.
+            Tap the card field to fill from your Wallet, or enter a US debit
+            card manually. Funds usually arrive 1–2 business days after your
+            group pays.
           </Text>
         </View>
 
@@ -512,7 +638,7 @@ export default function SetupPayoutsScreen({ navigation }) {
             ) : (
               <>
                 <MaterialIcons name="lock" size={18} color={colors.onSecondary} />
-                <Text style={styles.submitText}>Save & activate payouts</Text>
+                <Text style={styles.submitText}>Save payout method</Text>
               </>
             )}
           </LinearGradient>

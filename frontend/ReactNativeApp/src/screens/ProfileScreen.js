@@ -203,7 +203,7 @@ export default function ProfileScreen({ navigation }) {
                     }
                   />
                   <View style={styles.payoutTextCol}>
-                    <Text style={styles.rowText}>Instant payouts</Text>
+                    <Text style={styles.rowText}>Payouts</Text>
                     <Text style={styles.payoutSubtitle}>
                       {!connectStatus
                         ? 'Check status'

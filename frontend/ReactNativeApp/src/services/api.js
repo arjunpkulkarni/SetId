@@ -358,9 +358,11 @@ export const virtualCards = {
 };
 
 // ─── Stripe Connect (host payouts) ───────────────────────────────────────────
-// Host-side endpoints for Express onboarding + instant payouts to a debit
-// card. Nothing here is used by guests paying bills — guests go through
-// `paymentMethods` / the existing PaymentIntent flow.
+// Host-side endpoints for Custom-account onboarding + automatic daily
+// payouts to a debit card. Nothing here is used by guests paying bills —
+// guests go through `paymentMethods` / the existing PaymentIntent flow.
+// There is no "cash out" endpoint: Stripe runs payouts automatically on
+// the account's daily schedule.
 export const stripeConnect = {
   /** Fetch current Connect account status. Returns: {
    *  connected, charges_enabled, payouts_enabled, details_submitted,
@@ -382,14 +384,17 @@ export const stripeConnect = {
    *  Replaces the old `/onboard` → Stripe-hosted redirect flow. */
   setupPayouts: (payload) => client.post('/stripe/connect/setup', payload),
 
-  /** Instant-payable balance in cents. */
+  /** Swap the user's payout card without re-submitting identity info.
+   *  Used by the "Change payout method" flow after initial setup.
+   *  Payload: { card_token: 'tok_xxx' }. */
+  updatePayoutCard: ({ card_token }) =>
+    client.post('/stripe/connect/external-account', { card_token }),
+
+  /** Pending-balance in cents — the amount that will go out in the next
+   *  scheduled daily payout. Returns `{ available_cents, currency }`. */
   getBalance: () => client.get('/stripe/connect/balance'),
 
-  /** Trigger an instant payout to the host's debit card. */
-  createPayout: ({ amount_cents, currency = 'usd' }) =>
-    client.post('/stripe/connect/payouts', { amount_cents, currency }),
-
-  /** Last 20 payouts for the current user. */
+  /** Last 20 payouts for the current user (history / next-arrival). */
   listPayouts: () => client.get('/stripe/connect/payouts'),
 };
 

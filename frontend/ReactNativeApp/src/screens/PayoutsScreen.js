@@ -4,11 +4,9 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
-  TextInput,
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
-  Alert,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -36,6 +34,20 @@ function formatDate(iso) {
   }
 }
 
+// `arrival_date` from Stripe is a Unix timestamp (seconds). Format it as
+// a human-friendly date so the "Next payout" line reads like "Apr 25".
+function formatArrivalDate(unixSeconds) {
+  if (!unixSeconds) return '';
+  try {
+    return new Date(unixSeconds * 1000).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    });
+  } catch {
+    return '';
+  }
+}
+
 // Human-friendly mapping of Stripe payout statuses.
 const STATUS_META = {
   paid: { label: 'Paid', color: colors.secondary, icon: 'check-circle' },
@@ -53,7 +65,7 @@ const STATUS_META = {
  */
 function describeRequirement(key) {
   const map = {
-    'external_account': 'Add a debit card for payouts.',
+    'external_account': 'Add a payout method.',
     'individual.verification.document': 'Upload a photo of your ID.',
     'individual.verification.additional_document': 'Upload an additional document (utility bill or bank statement).',
     'individual.id_number': 'Provide your full SSN.',
@@ -82,12 +94,10 @@ export default function PayoutsScreen({ navigation }) {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [paying, setPaying] = useState(false);
 
   const [status, setStatus] = useState(null);
   const [balanceCents, setBalanceCents] = useState(0);
   const [payouts, setPayouts] = useState([]);
-  const [amount, setAmount] = useState('');
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -112,7 +122,12 @@ export default function PayoutsScreen({ navigation }) {
           stripeConnect.listPayouts().catch(() => null),
         ]);
         if (!mountedRef.current) return;
-        setBalanceCents(balanceRes?.data?.instant_available_cents ?? 0);
+        // Backend now returns `available_cents` (money eligible for the
+        // next daily payout). Falls back to the legacy
+        // `instant_available_cents` key for backwards compatibility with
+        // any older server still in rotation.
+        const b = balanceRes?.data ?? {};
+        setBalanceCents(b.available_cents ?? b.instant_available_cents ?? 0);
         setPayouts(Array.isArray(payoutsRes?.data) ? payoutsRes.data : []);
       } else {
         setBalanceCents(0);
@@ -155,44 +170,15 @@ export default function PayoutsScreen({ navigation }) {
     });
   };
 
-  const handleCashOut = async () => {
-    if (paying) return;
-
-    const parsed = parseFloat(amount);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      Alert.alert('Invalid amount', 'Enter a positive dollar amount.');
-      return;
-    }
-    const cents = Math.round(parsed * 100);
-    if (cents < 50) {
-      Alert.alert('Too small', 'Minimum instant payout is $0.50.');
-      return;
-    }
-    if (cents > balanceCents) {
-      Alert.alert(
-        'Amount too high',
-        `You have ${formatUsd(balanceCents)} available for instant payout.`,
-      );
-      return;
-    }
-
-    setPaying(true);
-    try {
-      await stripeConnect.createPayout({ amount_cents: cents, currency: 'usd' });
-      setAmount('');
-      await refreshAll();
-      Alert.alert(
-        'Payout sent',
-        'Funds typically land on your debit card within 30 minutes.',
-      );
-    } catch (err) {
-      Alert.alert(
-        'Payout failed',
-        err?.error?.message ?? err?.message ?? 'Please try again.',
-      );
-    } finally {
-      setPaying(false);
-    }
+  // "Change payout method" for already-onboarded users. Doesn't collect
+  // identity again — just a new card. The status badge refreshes on
+  // return so the last-4 updates immediately.
+  const handleChangePayoutCard = () => {
+    navigation.navigate('UpdatePayoutCard', {
+      currentBrand: status?.external_account_brand,
+      currentLast4: status?.external_account_last4,
+      onUpdated: () => refreshAll(),
+    });
   };
 
   // ── UI subsections ────────────────────────────────────────────────────
@@ -205,9 +191,9 @@ export default function PayoutsScreen({ navigation }) {
             <MaterialIcons name="account-balance" size={22} color={colors.onSurfaceVariant} />
           </View>
           <View style={styles.statusTextCol}>
-            <Text style={styles.statusTitle}>Not connected</Text>
+            <Text style={styles.statusTitle}>No payout method</Text>
             <Text style={styles.statusSubtitle}>
-              Connect a debit card to receive payouts from bills you host.
+              Add a payout method so your group can pay you back.
             </Text>
           </View>
         </View>
@@ -284,19 +270,29 @@ export default function PayoutsScreen({ navigation }) {
           <Text style={styles.statusTitle}>Payouts active</Text>
           <Text style={styles.statusSubtitle}>{cardDesc}</Text>
         </View>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={handleChangePayoutCard}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={styles.statusAction}
+        >
+          <Text style={styles.statusActionText}>Change</Text>
+        </TouchableOpacity>
       </View>
     );
   };
 
   const renderBalanceCard = () => {
-    const canInstantPayout =
-      status?.connected
-      && status?.payouts_enabled
-      && status?.has_instant_external_account;
+    // Prefer the arrival date of the nearest in-flight payout. Falls
+    // back to a generic 1–2 business day message if nothing is pending.
+    const nextPayout = payouts.find(
+      (p) => p.status === 'pending' || p.status === 'in_transit',
+    );
+    const nextArrival = formatArrivalDate(nextPayout?.arrival_date);
 
     return (
       <View style={[styles.balanceCard, shadows.card]}>
-        <Text style={styles.balanceLabel}>Available for instant payout</Text>
+        <Text style={styles.balanceLabel}>Pending balance</Text>
         <Text style={styles.balanceAmount}>{formatUsd(balanceCents)}</Text>
 
         {!status?.connected ? (
@@ -312,7 +308,7 @@ export default function PayoutsScreen({ navigation }) {
               style={styles.primaryBtnGradient}
             >
               <MaterialIcons name="account-balance" size={18} color={colors.onSecondary} />
-              <Text style={styles.primaryBtnText}>Connect a debit card</Text>
+              <Text style={styles.primaryBtnText}>Add payout method</Text>
             </LinearGradient>
           </TouchableOpacity>
         ) : !status.details_submitted || !status.payouts_enabled ? (
@@ -329,73 +325,16 @@ export default function PayoutsScreen({ navigation }) {
             >
               <MaterialIcons name="arrow-forward" size={18} color={colors.onSecondary} />
               <Text style={styles.primaryBtnText}>
-                {status.details_submitted ? 'Update card info' : 'Finish setup'}
+                {status.details_submitted ? 'Update payout method' : 'Finish setup'}
               </Text>
             </LinearGradient>
           </TouchableOpacity>
         ) : (
-          <>
-            <View style={styles.amountRow}>
-              <Text style={styles.amountPrefix}>$</Text>
-              <TextInput
-                style={styles.amountInput}
-                keyboardType="decimal-pad"
-                placeholder="0.00"
-                placeholderTextColor={colors.outline}
-                value={amount}
-                onChangeText={setAmount}
-                editable={!paying && canInstantPayout}
-                returnKeyType="done"
-              />
-              <TouchableOpacity
-                activeOpacity={0.7}
-                onPress={() => setAmount((balanceCents / 100).toFixed(2))}
-                disabled={!canInstantPayout || balanceCents === 0}
-                style={styles.maxButton}
-              >
-                <Text
-                  style={[
-                    styles.maxButtonText,
-                    (!canInstantPayout || balanceCents === 0) && styles.maxButtonTextDisabled,
-                  ]}
-                >
-                  MAX
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={handleCashOut}
-              disabled={paying || !canInstantPayout || balanceCents === 0}
-              style={[
-                styles.primaryBtn,
-                (!canInstantPayout || balanceCents === 0) && styles.primaryBtnDisabled,
-              ]}
-            >
-              <LinearGradient
-                colors={[colors.secondary, colors.secondaryDim]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.primaryBtnGradient}
-              >
-                {paying ? (
-                  <ActivityIndicator color={colors.onSecondary} />
-                ) : (
-                  <>
-                    <MaterialIcons name="flash-on" size={18} color={colors.onSecondary} />
-                    <Text style={styles.primaryBtnText}>Cash out instantly</Text>
-                  </>
-                )}
-              </LinearGradient>
-            </TouchableOpacity>
-
-            {!status.has_instant_external_account && (
-              <Text style={styles.hint}>
-                Add a debit card that supports instant payouts to enable this.
-              </Text>
-            )}
-          </>
+          <Text style={styles.hint}>
+            {nextArrival
+              ? `Next payout: ${nextArrival}`
+              : 'Funds arrive 1–2 business days after your group pays.'}
+          </Text>
         )}
       </View>
     );
@@ -563,6 +502,21 @@ const styles = StyleSheet.create({
     marginTop: 3,
     lineHeight: 18,
   },
+  // "Change" affordance on the active status card — small ghost button
+  // sitting to the right of the card description.
+  statusAction: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.full,
+    backgroundColor: colors.surfaceContainerLowest,
+  },
+  statusActionText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.secondary,
+    letterSpacing: 0.6,
+  },
 
   // Balance card
   balanceCard: {
@@ -588,50 +542,9 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 18,
   },
-  amountRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surfaceContainerLow,
-    borderRadius: radii.lg,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 14,
-  },
-  amountPrefix: {
-    fontFamily: 'Manrope_700Bold',
-    fontSize: 22,
-    color: colors.onSurfaceVariant,
-    marginRight: 4,
-  },
-  amountInput: {
-    flex: 1,
-    fontFamily: 'Manrope_700Bold',
-    fontSize: 22,
-    color: colors.onSurface,
-    padding: 0,
-  },
-  maxButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: radii.full,
-    backgroundColor: colors.surfaceContainer,
-  },
-  maxButtonText: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.secondary,
-    letterSpacing: 1,
-  },
-  maxButtonTextDisabled: {
-    color: colors.outline,
-  },
   primaryBtn: {
     borderRadius: radii.full,
     overflow: 'hidden',
-  },
-  primaryBtnDisabled: {
-    opacity: 0.5,
   },
   primaryBtnGradient: {
     flexDirection: 'row',

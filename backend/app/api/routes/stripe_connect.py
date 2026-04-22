@@ -1,5 +1,10 @@
-"""HTTP routes for Stripe Connect: onboard hosts, check status, instant
-payouts to debit cards, list history, and receive Connect webhooks."""
+"""HTTP routes for Stripe Connect: onboard hosts, check status, list
+payout history, and receive Connect webhooks.
+
+We don't expose an endpoint for triggering payouts — Stripe runs them
+automatically on the account's daily schedule (see
+`stripe_connect_service.ensure_connected_account`).
+"""
 
 import logging
 
@@ -14,7 +19,7 @@ from app.models.user import User
 from app.schemas.payout import (
     BalanceOut,
     ConnectStatusOut,
-    PayoutCreate,
+    ExternalAccountUpdateRequest,
     PayoutOut,
     PayoutsSetupRequest,
 )
@@ -35,11 +40,6 @@ _STATUS_BY_CODE: dict[str, int] = {
     "NOT_CONNECTED": 409,
     "HOST_NOT_ONBOARDED": 409,
     "PAYOUTS_TEMPORARILY_DISABLED": 409,
-    "EXTERNAL_ACCOUNT_NOT_INSTANT_CAPABLE": 409,
-    "INSUFFICIENT_INSTANT_BALANCE": 409,
-    "INVALID_AMOUNT": 400,
-    "AMOUNT_TOO_SMALL": 400,
-    "PAYOUT_INVALID": 400,
     "IDENTITY_REJECTED": 400,
     "CARD_DECLINED": 402,
     "INVALID_CARD": 400,
@@ -101,6 +101,32 @@ def submit_payout_setup(
     )
 
 
+@router.post("/external-account", status_code=200)
+def update_external_account(
+    body: ExternalAccountUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Swap the payout card on an already-onboarded account.
+
+    Used by the mobile "Change payout method" flow — the user already
+    submitted identity during initial setup and is just replacing the
+    debit card. Identity fields are NOT re-collected here.
+    """
+    try:
+        svc = StripeConnectService(db)
+        status_obj = svc.replace_external_account(
+            current_user, card_token=body.card_token
+        )
+    except StripeConnectError as e:
+        return _to_error(e)
+
+    return success_response(
+        data=ConnectStatusOut(**status_obj.__dict__).model_dump(),
+        message="Payout method updated",
+    )
+
+
 @router.get("/status")
 def get_status(
     db: Session = Depends(get_db),
@@ -121,38 +147,18 @@ def get_balance(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Pending balance (what'll go out in the next daily payout)."""
     try:
         svc = StripeConnectService(db)
-        cents = svc.get_instant_available_cents(current_user)
+        cents = svc.get_available_cents(current_user)
     except StripeConnectError as e:
         return _to_error(e)
     return success_response(
-        data=BalanceOut(instant_available_cents=cents, currency="usd").model_dump()
+        data=BalanceOut(available_cents=cents, currency="usd").model_dump()
     )
 
 
 # ─── Payouts ─────────────────────────────────────────────────────────────
-
-
-@router.post("/payouts", status_code=201)
-def create_instant_payout(
-    body: PayoutCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    try:
-        svc = StripeConnectService(db)
-        payout = svc.create_instant_payout(
-            current_user,
-            amount_cents=body.amount_cents,
-            currency=body.currency.lower(),
-        )
-    except StripeConnectError as e:
-        return _to_error(e)
-    return success_response(
-        data=PayoutOut.model_validate(payout).model_dump(),
-        message="Instant payout created",
-    )
 
 
 @router.get("/payouts")
