@@ -181,7 +181,12 @@ CLEANUP_RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {
         "name": "receipt_cleanup",
-        "strict": True,
+        # `strict: False` + loosened `required` so that smaller LLMs that
+        # occasionally misplace fields (e.g. putting `confidence` on the
+        # item instead of the top level) don't cause a hard 400 from the
+        # Groq schema validator. The Python-side `CleanupReceiptPayload`
+        # still normalizes and defaults missing values downstream.
+        "strict": False,
         "schema": {
             "type": "object",
             "properties": {
@@ -210,17 +215,24 @@ CLEANUP_RESPONSE_FORMAT = {
                                 "type": "array",
                                 "items": {"type": "string"},
                             },
+                            # Tolerate the LLM putting confidence here even
+                            # though we don't use it — prevents a 400 when
+                            # the model accidentally emits it per-item.
+                            "confidence": {"type": ["number", "null"]},
                         },
                         "required": ["name", "quantity", "unit_price", "total_price", "modifiers"],
-                        "additionalProperties": False,
+                        "additionalProperties": True,
                     },
                 },
                 "confidence": {
-                    "type": "number",
+                    "type": ["number", "null"],
                 },
             },
-            "required": ["merchant_name", "subtotal", "tax", "total", "items", "confidence"],
-            "additionalProperties": False,
+            # `confidence` removed from required — smaller models sometimes
+            # misplace it (e.g. onto items), which triggers a 400 from Groq's
+            # schema validator. We default it to 0.5 in Python when missing.
+            "required": ["merchant_name", "subtotal", "tax", "total", "items"],
+            "additionalProperties": True,
         },
     },
 }
@@ -325,11 +337,17 @@ class CleanupReceiptPayload(BaseModel):
     @field_validator("confidence", mode="before")
     @classmethod
     def validate_confidence(cls, value: object) -> Decimal:
+        # Default to 0.5 when the LLM omits confidence (some smaller
+        # models put it in the wrong place or skip it entirely). The
+        # validator downstream derives overall confidence from item
+        # alignment + warnings too, so a neutral default here is fine.
         confidence = _coerce_decimal(value)
         if confidence is None:
-            raise ValueError("Confidence is required")
-        if confidence < 0 or confidence > 1:
-            raise ValueError("Confidence must be between 0 and 1")
+            return Decimal("0.5")
+        if confidence < 0:
+            return Decimal("0.0")
+        if confidence > 1:
+            return Decimal("1.0")
         return confidence
 
 
