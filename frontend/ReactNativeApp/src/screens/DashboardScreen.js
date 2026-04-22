@@ -209,17 +209,15 @@ function MemberCountBubbles({ count }) {
 }
 
 /**
- * Wraps a bill card with left-swipe-to-delete. Only drafts are actually
- * deletable from here; for other statuses we just render the child unchanged
- * so users can't accidentally delete an active or settled bill.
+ * Wraps a bill card with left-swipe-to-delete. Works for any bill status
+ * (draft / active / settled). Non-draft deletions get a stronger
+ * confirmation because they remove real financial history — guests who
+ * paid their share will lose the bill from their Activity too.
  */
 function SwipeToDeleteBill({ bill, onDelete, children }) {
   const swipeableRef = useRef(null);
-  const isDraft = bill?.status === 'draft';
-
-  if (!isDraft) {
-    return children;
-  }
+  const status = bill?.status ?? 'draft';
+  const isDraft = status === 'draft';
 
   const close = () => {
     try {
@@ -230,9 +228,22 @@ function SwipeToDeleteBill({ bill, onDelete, children }) {
   };
 
   const confirmDelete = () => {
+    // Draft = nothing-lost delete. Active/settled = warn about guest-side
+    // impact and use a firmer prompt. Backend allows all three equally
+    // (`DELETE /bills/:id` only gates on bill ownership).
+    const title = isDraft
+      ? 'Delete draft?'
+      : status === 'settled'
+        ? 'Delete settled bill?'
+        : 'Delete active bill?';
+    const message = isDraft
+      ? 'This will permanently remove this draft bill. This action cannot be undone.'
+      : 'This permanently removes the bill for you AND anyone you invited. '
+        + 'Payments already collected won\'t be refunded. This cannot be undone.';
+
     Alert.alert(
-      'Delete draft?',
-      'This will permanently remove this draft bill. This action cannot be undone.',
+      title,
+      message,
       [
         { text: 'Cancel', style: 'cancel', onPress: close },
         {
