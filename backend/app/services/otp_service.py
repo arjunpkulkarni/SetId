@@ -35,8 +35,22 @@ def otp_uses_dev_store() -> bool:
     return not _twilio_configured() and settings.OTP_DEV_MODE
 
 
+def is_test_phone(phone_e164: str) -> bool:
+    """True when the number is a configured test-login bypass phone."""
+    return phone_e164 in settings.TEST_PHONE_NUMBERS
+
+
 def send_otp(phone_e164: str) -> None:
     """Send OTP via Twilio Verify or dev store."""
+    # Test-login bypass: never hit Twilio for configured test numbers.
+    # verify_otp will accept only settings.TEST_OTP_CODE for these.
+    if is_test_phone(phone_e164):
+        logger.info(
+            "OTP test bypass: no SMS sent for %s (fixed code active)",
+            phone_e164,
+        )
+        return
+
     if _twilio_configured():
         from twilio.rest import Client
 
@@ -68,6 +82,14 @@ def send_otp(phone_e164: str) -> None:
 
 def verify_otp(phone_e164: str, code: str) -> Literal["approved", "invalid", "expired"]:
     """Verify OTP. Returns status category for error mapping."""
+    # Test-login bypass: accept the fixed code without touching Twilio or
+    # the dev store so test accounts work regardless of provider config.
+    if is_test_phone(phone_e164):
+        if code.strip() == settings.TEST_OTP_CODE:
+            logger.info("OTP test bypass: approved %s", phone_e164)
+            return "approved"
+        return "invalid"
+
     if _twilio_configured():
         from twilio.base.exceptions import TwilioRestException
         from twilio.rest import Client

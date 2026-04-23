@@ -22,6 +22,7 @@ from app.schemas.auth import (
 from app.services.auth_service import AuthService
 from app.services.otp_service import (
     OtpProviderError,
+    is_test_phone,
     otp_uses_dev_store,
     send_otp as send_sms_otp,
 )
@@ -134,15 +135,18 @@ def send_otp(request: Request, body: SendOtpRequest, db: Session = Depends(get_d
             "Enter a valid phone number in international format.",
             400,
         )
-    try:
-        check_phone_send_limit(phone_e164)
-    except PermissionError as e:
-        logger.warning(
-            "auth.send_otp rate_limited phone_tail=%s ip=%s",
-            phone_e164[-4:],
-            request.client.host if request.client else None,
-        )
-        return error_response("RATE_LIMIT_EXCEEDED", str(e), 429)
+    # Test-login bypass phones skip the per-phone rate limit so reviewers
+    # / QA can exercise the flow repeatedly without tripping the hourly cap.
+    if not is_test_phone(phone_e164):
+        try:
+            check_phone_send_limit(phone_e164)
+        except PermissionError as e:
+            logger.warning(
+                "auth.send_otp rate_limited phone_tail=%s ip=%s",
+                phone_e164[-4:],
+                request.client.host if request.client else None,
+            )
+            return error_response("RATE_LIMIT_EXCEEDED", str(e), 429)
     svc = AuthService(db)
     try:
         svc.assert_send_otp_intent(phone_e164, body.intent)

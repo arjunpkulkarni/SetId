@@ -112,6 +112,17 @@ class Settings(BaseSettings):
     # Max OTP send attempts per E.164 phone per rolling hour (in addition to IP limits)
     OTP_MAX_SENDS_PER_PHONE_PER_HOUR: int = 5
 
+    # ─── Test-login bypass (Apple review / QA / demos) ────────────────
+    # Any phone number listed here skips Twilio entirely: send_otp is a
+    # no-op and verify_otp accepts only TEST_OTP_CODE. The bypass is
+    # active even when Twilio credentials are configured, so it is safe
+    # to use in production, but keep the list small and rotate the code
+    # periodically. Numbers should be in E.164 (e.g. "+15555550100").
+    # Fictitious US numbers like +1 (555) 01xx are encouraged since they
+    # can never receive real SMS even if the bypass is later removed.
+    TEST_PHONE_NUMBERS: list[str] = []
+    TEST_OTP_CODE: str = "424242"
+
     # Service fee defaults (can be overridden per-bill)
     SERVICE_FEE_TYPE: str = "percentage"  # "flat" or "percentage"
     SERVICE_FEE_FLAT_AMOUNT: float = 0.75  # $0.75 default flat fee
