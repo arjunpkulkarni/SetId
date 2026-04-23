@@ -33,7 +33,7 @@ function toE164Us10(digits) {
   const d = digits.replace(/\D/g, '');
   if (d.length !== 10) return null;
   const p = parsePhoneNumberFromString(`+1${d}`, 'US');
-  return p?.isValid() ? p.format('E.164') : null;
+  return p?.isPossible() ? p.format('E.164') : null;
 }
 
 function maskPhoneTail(e164) {
