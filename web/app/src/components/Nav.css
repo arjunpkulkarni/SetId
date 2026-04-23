@@ -41,7 +41,8 @@
   width: 34px;
   height: 34px;
   border-radius: 10px;
-  background: var(--color-mint-tint-2);
+  background: #ffffff;
+  border: 1px solid var(--color-border);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -49,8 +50,9 @@
 }
 
 .nav-dark:not(.nav-scrolled) .nav-logo-shell {
-  background: rgba(255, 255, 255, 0.15);
+  background: #ffffff;
   border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
 }
 
 .nav-logo-shell img {
