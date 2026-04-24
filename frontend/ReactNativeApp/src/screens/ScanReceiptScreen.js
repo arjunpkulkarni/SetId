@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { colors, radii, shadows } from '../theme';
 import { receipts } from '../services/api';
 import * as ImagePicker from 'expo-image-picker';
@@ -45,6 +46,16 @@ async function downscaleReceiptImage(uri) {
 const { width: SW } = Dimensions.get('window');
 const RETICLE_W = SW - 96;
 const RETICLE_H = RETICLE_W * 1.15;
+
+// Zoom preset values. `value` is what we pass to CameraView's `zoom`
+// prop (0..1). These match roughly-familiar "nX" optical labels on
+// an iPhone. The maximum digital zoom on expo-camera gets noisy fast
+// so we cap at 3x (≈ 0.25) to keep OCR happy.
+const ZOOM_PRESETS = [
+  { label: '1x', value: 0 },
+  { label: '2x', value: 0.08 },
+  { label: '3x', value: 0.2 },
+];
 
 function ScanLine() {
   const translateY = useRef(new Animated.Value(0)).current;
@@ -110,6 +121,37 @@ export default function ScanReceiptScreen({ navigation, route }) {
   // stayed up during the 5-10s upload+parse, which felt like they had to
   // keep holding the receipt in frame.
   const [lastCaptureUri, setLastCaptureUri] = useState(null);
+
+  // Camera zoom. expo-camera's `zoom` prop is 0..1. We keep the practical
+  // range smaller (0..0.5) since higher digital-zoom values produce
+  // noise that hurts OCR. Pinch-to-zoom and a tappable reset chip both
+  // write to this state.
+  const [zoom, setZoom] = useState(0);
+  const pinchBaseZoom = useRef(0);
+
+  // Pinch gesture → updates zoom. Runs on JS thread (no Reanimated
+  // shared-values) because the CameraView's `zoom` prop is a plain
+  // React prop anyway. Stutter is imperceptible at 60 fps for a simple
+  // setState.
+  const pinchGesture = useRef(
+    Gesture.Pinch()
+      .onStart(() => {
+        pinchBaseZoom.current = zoom;
+      })
+      .onUpdate((e) => {
+        // e.scale is 1 at pinch start, >1 pinching out (zoom in),
+        // <1 pinching in (zoom out). Map the delta to a gentle zoom
+        // adjustment — (scale-1)*0.35 feels natural on iPhone.
+        const delta = (e.scale - 1) * 0.35;
+        const next = Math.max(0, Math.min(0.5, pinchBaseZoom.current + delta));
+        setZoom(next);
+      }),
+  ).current;
+
+  // Keep the pinch base zoom in sync when zoom is reset via the chip.
+  useEffect(() => {
+    pinchBaseZoom.current = zoom;
+  }, [zoom]);
 
   useEffect(() => {
     if (!permission || permission.granted || autoRequestedPermission.current) return;
@@ -336,12 +378,15 @@ export default function ScanReceiptScreen({ navigation, route }) {
           <View style={styles.frozenDim} pointerEvents="none" />
         </>
       ) : canUseCamera ? (
-        <CameraView
-          ref={cameraRef}
-          style={StyleSheet.absoluteFillObject}
-          facing="back"
-          onCameraReady={() => setCameraReady(true)}
-        />
+        <GestureDetector gesture={pinchGesture}>
+          <CameraView
+            ref={cameraRef}
+            style={StyleSheet.absoluteFillObject}
+            facing="back"
+            zoom={zoom}
+            onCameraReady={() => setCameraReady(true)}
+          />
+        </GestureDetector>
       ) : (
         <View style={styles.cameraBgPlaceholder}>
           <MaterialIcons name="photo-camera" size={64} color="rgba(255,255,255,0.15)" />
@@ -365,6 +410,37 @@ export default function ScanReceiptScreen({ navigation, route }) {
           <View style={styles.topBarBtn} />
         </View>
       </View>
+
+      {/* Zoom presets. Tap to jump between 1x / 2x / 3x; pinch the
+          camera for continuous fine-tune. Hidden on the frozen still
+          and after parse since there's nothing to zoom. */}
+      {canUseCamera && !frozen && !parsedData && (
+        <View style={[styles.zoomPresetRow, { top: insets.top + 56 }]}>
+          {ZOOM_PRESETS.map((preset) => {
+            const active = Math.abs(zoom - preset.value) < 0.005;
+            return (
+              <TouchableOpacity
+                key={preset.label}
+                activeOpacity={0.85}
+                onPress={() => {
+                  setZoom(preset.value);
+                  Haptics.selectionAsync().catch(() => {});
+                }}
+                style={[styles.zoomPresetChip, active && styles.zoomPresetChipActive]}
+              >
+                <Text
+                  style={[
+                    styles.zoomPresetText,
+                    active && styles.zoomPresetTextActive,
+                  ]}
+                >
+                  {preset.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
 
       {/* Reticle. We hide the animated scan line once a capture is frozen
           — there's nothing to "scan" anymore, the pixels are locked in.
@@ -583,6 +659,42 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: 'rgba(255,255,255,0.9)',
     letterSpacing: -0.3,
+  },
+
+  // Zoom preset pill row. Floats above the reticle on the right side
+  // so it's reachable with the thumb but doesn't overlap the receipt
+  // framing area.
+  zoomPresetRow: {
+    position: 'absolute',
+    right: 16,
+    zIndex: 30,
+    flexDirection: 'column',
+    gap: 8,
+    alignItems: 'center',
+  },
+  zoomPresetChip: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  zoomPresetChipActive: {
+    backgroundColor: colors.secondaryContainer,
+    borderColor: colors.secondary,
+  },
+  zoomPresetText: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 13,
+    fontWeight: '800',
+    color: 'rgba(255, 255, 255, 0.85)',
+    letterSpacing: 0.3,
+  },
+  zoomPresetTextActive: {
+    color: colors.onSecondaryContainer,
   },
 
   reticleContainer: {
