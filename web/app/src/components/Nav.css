@@ -169,3 +169,77 @@
   .nav-cta { display: none; }
   .nav-burger { display: flex; margin-left: auto; }
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Dark editorial variant — used by the LandingPage redesign
+   ───────────────────────────────────────────────────────────── */
+
+.nav-dark-editorial {
+  background: transparent;
+  color: rgba(236, 230, 216, 0.9);
+  border-bottom-color: transparent;
+}
+
+.nav-dark-editorial.nav-scrolled {
+  background: rgba(10, 13, 12, 0.72);
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  border-bottom-color: rgba(236, 230, 216, 0.08);
+  box-shadow: none;
+  color: #ece6d8;
+}
+
+.nav-dark-editorial .nav-logo-img {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 16px rgba(59, 138, 114, 0.4));
+}
+
+.nav-dark-editorial .nav-brand { gap: 12px; }
+
+.nav-dark-editorial .nav-wordmark {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-style: italic;
+  font-weight: 400;
+  font-size: 28px;
+  letter-spacing: -0.5px;
+  color: #ece6d8;
+}
+
+.nav-dark-editorial .nav-link {
+  color: rgba(236, 230, 216, 0.7);
+  opacity: 1;
+  font-weight: 500;
+  font-size: 13.5px;
+}
+.nav-dark-editorial .nav-link:hover { color: #ece6d8; opacity: 1; }
+.nav-dark-editorial .nav-link-quiet { color: rgba(236, 230, 216, 0.55); }
+
+.nav-dark-editorial .nav-cta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.nav-dark-editorial .nav-cta-btn {
+  height: 40px;
+  padding: 0 18px;
+  background: #ece6d8;
+  color: #0a0d0c;
+  border-radius: 999px;
+  box-shadow: none;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-family: var(--font-body);
+  letter-spacing: 0;
+}
+.nav-dark-editorial .nav-cta-btn:hover {
+  background: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(236, 230, 216, 0.15);
+  opacity: 1;
+}
+
+.nav-dark-editorial .nav-burger { color: #ece6d8; }
+

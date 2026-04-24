@@ -18,6 +18,8 @@ export default function Nav({ variant = 'light' }) {
   useEffect(() => setOpen(false), [location.pathname]);
 
   const isLanding = location.pathname === '/';
+  const isEditorial = variant === 'dark-editorial';
+
   const classes = [
     'nav',
     `nav-${variant}`,
@@ -29,10 +31,14 @@ export default function Nav({ variant = 'light' }) {
     <header className={classes}>
       <div className="nav-inner container">
         <Link to="/" className="nav-brand" aria-label="Settld home">
-          <span className="nav-logo-shell">
-            <img src={logo} alt="" />
-          </span>
-          <span className="nav-wordmark">Settld.</span>
+          {isEditorial ? (
+            <img src={logo} alt="" className="nav-logo-img" />
+          ) : (
+            <span className="nav-logo-shell">
+              <img src={logo} alt="" />
+            </span>
+          )}
+          <span className="nav-wordmark">{isEditorial ? 'settld' : 'Settld.'}</span>
         </Link>
 
         <nav className="nav-links" aria-label="Primary">
@@ -49,11 +55,18 @@ export default function Nav({ variant = 'light' }) {
               <NavLink to="/marketing" className="nav-link">Press</NavLink>
             </>
           )}
-          <Link to="/support" className="nav-link nav-link-sm">Support</Link>
+          {!isEditorial && (
+            <Link to="/support" className="nav-link nav-link-sm">Support</Link>
+          )}
         </nav>
 
         <div className="nav-cta">
-          <a href="#download" className="btn btn-primary nav-cta-btn">Get the app</a>
+          {isEditorial && (
+            <a href="#download" className="nav-link nav-link-quiet">Sign in</a>
+          )}
+          <a href="#download" className="btn btn-primary nav-cta-btn">
+            {isEditorial ? 'Get the app →' : 'Get the app'}
+          </a>
         </div>
 
         <button
