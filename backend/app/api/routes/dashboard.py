@@ -91,8 +91,16 @@ def _load_dashboard_aggregates(db: Session, user_id: str) -> _DashboardAggregate
     bill_ids = [b.id for b in bills]
 
     # 2. All members of those bills in one query.
+    # Exclude the shared invite-link placeholder row — it represents the
+    # share link itself, not a real guest, and should not appear in counts
+    # or on the dashboard.
     members: list[BillMember] = (
-        db.query(BillMember).filter(BillMember.bill_id.in_(bill_ids)).all()
+        db.query(BillMember)
+        .filter(
+            BillMember.bill_id.in_(bill_ids),
+            BillMember.status != "invite_link",
+        )
+        .all()
     )
     members_by_bill: dict[uuid.UUID, list[BillMember]] = {}
     for m in members:

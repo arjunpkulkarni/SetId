@@ -33,8 +33,13 @@ EMPTY_DRAFT_MIN_AGE_SECONDS = 120
 
 
 def _bill_out(bill) -> dict:
-    """Helper to serialize a bill with member_count set."""
-    bill.member_count = len(bill.members) if bill.members else 0
+    """Helper to serialize a bill with member_count set.
+
+    Excludes the shared invite-link placeholder row — it represents the
+    share link itself, not a real participant.
+    """
+    real_members = [m for m in (bill.members or []) if m.status != "invite_link"]
+    bill.member_count = len(real_members)
     return BillOut.model_validate(bill).model_dump()
 
 
@@ -153,11 +158,14 @@ def cleanup_empty_drafts(
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=EMPTY_DRAFT_MIN_AGE_SECONDS)
 
     # Member count per bill (owner counts as a member too).
+    # Excludes the shared invite-link placeholder row so a bill whose host
+    # generated (but never shared) an invite link isn't considered non-empty.
     member_count_subq = (
         db.query(
             BillMember.bill_id.label("bill_id"),
             func.count(BillMember.id).label("member_count"),
         )
+        .filter(BillMember.status != "invite_link")
         .group_by(BillMember.bill_id)
         .subquery()
     )
@@ -269,7 +277,8 @@ def get_bill_summary(
     total_paid = breakdown["total_paid"]
     total_remaining = breakdown["total_remaining"]
 
-    bill.member_count = len(bill.members) if bill.members else 0
+    real_members = [m for m in (bill.members or []) if m.status != "invite_link"]
+    bill.member_count = len(real_members)
 
     summary = {
         "bill": BillOut.model_validate(bill).model_dump(),

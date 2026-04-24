@@ -184,11 +184,14 @@ class CalculationService:
                 ItemAssignment.receipt_item_id.in_(item_ids)
             ).delete(synchronize_session="fetch")
 
-        # Get members
+        # Get members (excluding the shared invite-link placeholder row)
         if member_ids is None:
             members = (
                 self.db.query(BillMember)
-                .filter(BillMember.bill_id == bill_id)
+                .filter(
+                    BillMember.bill_id == bill_id,
+                    BillMember.status != "invite_link",
+                )
                 .all()
             )
             member_ids = [str(m.id) for m in members]
@@ -334,9 +337,14 @@ class CalculationService:
         if not bill:
             raise ValueError(f"Bill {bill_id} not found")
 
+        # Exclude the shared invite-link placeholder row — it represents the
+        # share link itself, not a real guest, and has no assignments.
         members = (
             self.db.query(BillMember)
-            .filter(BillMember.bill_id == bill_id)
+            .filter(
+                BillMember.bill_id == bill_id,
+                BillMember.status != "invite_link",
+            )
             .all()
         )
 

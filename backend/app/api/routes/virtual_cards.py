@@ -80,7 +80,8 @@ def mark_ready(
 
     from app.schemas.bill import BillOut
 
-    bill.member_count = len(bill.members) if bill.members else 0
+    real_members = [m for m in (bill.members or []) if m.status != "invite_link"]
+    bill.member_count = len(real_members)
     return success_response(
         data=BillOut.model_validate(bill).model_dump(),
         message="Bill marked ready to pay",
@@ -114,7 +115,8 @@ def unmark_ready(
 
     from app.schemas.bill import BillOut
 
-    bill.member_count = len(bill.members) if bill.members else 0
+    real_members = [m for m in (bill.members or []) if m.status != "invite_link"]
+    bill.member_count = len(real_members)
     return success_response(
         data=BillOut.model_validate(bill).model_dump(),
         message="Readiness revoked",

@@ -22,9 +22,15 @@ export default function PartyJoinPage() {
     setError(null);
     try {
       const data = await joinParty(token, name);
-      navigate(`${basePath}/${token}/receipt`, {
+      // The server returns a per-guest `member_token`. All subsequent
+      // /party/{token}/… calls (receipt, claim, confirm, ws) must use this
+      // token — not the shared URL token — otherwise every guest would
+      // collide on the same placeholder row.
+      const memberToken = data.member_token || token;
+      navigate(`${basePath}/${memberToken}/receipt`, {
         state: {
           memberId: data.member_id,
+          memberToken,
           memberName: name,
           billId: data.bill_id,
           billTitle: data.bill_title,

@@ -35,7 +35,8 @@ def get_public_invite(token: str, db: Session = Depends(get_db)):
 
     owner = bill.owner
     owner_name = owner.full_name if owner else "Someone"
-    member_count = len(bill.members) if bill.members else 0
+    real_members = [m for m in (bill.members or []) if m.status != "invite_link"]
+    member_count = len(real_members)
 
     return success_response(
         data={

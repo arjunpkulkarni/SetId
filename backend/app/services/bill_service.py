@@ -72,9 +72,13 @@ class BillService:
         bills = query.order_by(Bill.created_at.desc()).all()
 
         for bill in bills:
+            # Exclude the shared invite-link placeholder from member counts.
             member_count = (
                 self.db.query(BillMember)
-                .filter(BillMember.bill_id == bill.id)
+                .filter(
+                    BillMember.bill_id == bill.id,
+                    BillMember.status != "invite_link",
+                )
                 .count()
             )
             bill.member_count = member_count  # type: ignore[attr-defined]
@@ -138,9 +142,14 @@ class BillService:
         return member
 
     def get_members(self, bill_id: str) -> list[BillMember]:
+        # Exclude the shared invite-link placeholder row — it represents the
+        # share link itself, not a real guest.
         return (
             self.db.query(BillMember)
-            .filter(BillMember.bill_id == bill_id)
+            .filter(
+                BillMember.bill_id == bill_id,
+                BillMember.status != "invite_link",
+            )
             .all()
         )
 
@@ -216,15 +225,10 @@ class BillService:
         user = self.db.query(User).filter(User.id == user_id).first()
         nickname = user.full_name if user else "Guest"
 
-        if member.status == "invite_link" and not member.user_id:
-            member.user_id = user_id
-            member.nickname = nickname
-            member.status = "joined"
-            member.joined_at = datetime.now(timezone.utc)
-            self.db.commit()
-            self.db.refresh(member)
-            return member
-
+        # Do NOT consume the shared invite-link placeholder here — it represents
+        # the share link itself and must remain available for additional guests
+        # to join through the same URL. Always mint a fresh BillMember row for
+        # the authenticated joiner instead.
         new_member = BillMember(
             bill_id=bill_id,
             user_id=user_id,

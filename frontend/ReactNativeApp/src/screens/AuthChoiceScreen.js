@@ -124,11 +124,19 @@ export default function AuthChoiceScreen({ navigation }) {
       if (err?.code === 'ERR_REQUEST_CANCELED' || err?.code === 'ERR_CANCELED') {
         return;
       }
-      const message =
+      console.log('[AppleAuth] sign in failed', {
+        code: err?.code,
+        message: err?.message,
+        name: err?.name,
+        stack: err?.stack,
+        raw: err,
+      });
+      const baseMessage =
         err instanceof ApiError
           ? err.message
           : err?.message || 'Could not sign in with Apple. Please try again.';
-      Alert.alert('Sign in failed', message);
+      const codeLabel = err?.code ? ` [${err.code}]` : '';
+      Alert.alert('Sign in failed', `${baseMessage}${codeLabel}`);
     } finally {
       setAppleLoading(false);
     }
