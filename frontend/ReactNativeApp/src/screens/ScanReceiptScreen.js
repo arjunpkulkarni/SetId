@@ -15,9 +15,32 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { colors, radii, shadows } from '../theme';
 import { receipts } from '../services/api';
 import * as ImagePicker from 'expo-image-picker';
+
+// Downscale receipts to ~2000px on the long edge before upload. Keeps
+// payloads under ~1MB on a full iPhone JPEG, which sidesteps any nginx
+// `client_max_body_size` limit in front of the API. 2000px is still
+// plenty of resolution for the OCR pipeline — the vision model
+// downsamples internally anyway.
+const RECEIPT_MAX_DIM = 2000;
+const RECEIPT_JPEG_QUALITY = 0.82;
+
+async function downscaleReceiptImage(uri) {
+  try {
+    const result = await manipulateAsync(
+      uri,
+      [{ resize: { width: RECEIPT_MAX_DIM } }],
+      { compress: RECEIPT_JPEG_QUALITY, format: SaveFormat.JPEG },
+    );
+    return { uri: result.uri, mime: 'image/jpeg', ext: 'jpg' };
+  } catch (err) {
+    if (__DEV__) console.warn('[SCAN] image downscale failed, uploading original', err);
+    return { uri, mime: 'image/jpeg', ext: 'jpg' };
+  }
+}
 
 const { width: SW } = Dimensions.get('window');
 const RETICLE_W = SW - 96;
@@ -232,14 +255,17 @@ export default function ScanReceiptScreen({ navigation, route }) {
         skipProcessing: false,
         exif: false,
       });
-      const ext = photo.format === 'png' ? 'png' : 'jpg';
-      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
-      enqueueReceiptImage(photo.uri, mime, `receipt-${Date.now()}.${ext}`);
-      // Freeze on the captured still so the user can lower their phone.
-      // This replaces the live `CameraView` in the render tree — the
-      // user sees exactly what got captured, and the UI switches to
-      // "Process / Add Page / Retake" actions.
-      setLastCaptureUri(photo.uri);
+      // Downscale before enqueueing so the upload fits under any
+      // client_max_body_size proxy limit.
+      const downscaled = await downscaleReceiptImage(photo.uri);
+      enqueueReceiptImage(
+        downscaled.uri,
+        downscaled.mime,
+        `receipt-${Date.now()}.${downscaled.ext}`,
+      );
+      // Freeze on the downscaled still so the user sees exactly what
+      // will be uploaded.
+      setLastCaptureUri(downscaled.uri);
       // Success haptic — tells the user "safe to lower the phone now".
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     } catch (err) {
@@ -267,22 +293,22 @@ export default function ScanReceiptScreen({ navigation, route }) {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        quality: 0.85,
+        quality: 1.0,
         allowsEditing: true,
       });
 
       if (result.canceled) return;
 
       const asset = result.assets[0];
+      // Downscale the picked image for the same reason we do it on
+      // capture — keeps uploads under proxy body-size limits.
+      const downscaled = await downscaleReceiptImage(asset.uri);
       enqueueReceiptImage(
-        asset.uri,
-        asset.mimeType || 'image/jpeg',
-        asset.fileName || `receipt-${Date.now()}.jpg`,
+        downscaled.uri,
+        downscaled.mime,
+        asset.fileName || `receipt-${Date.now()}.${downscaled.ext}`,
       );
-      // Show the picked image in the frozen viewer so the gallery path
-      // matches the camera-capture UX: user sees what they chose before
-      // tapping Process.
-      setLastCaptureUri(asset.uri);
+      setLastCaptureUri(downscaled.uri);
     } catch (err) {
       Alert.alert('Error', err?.message ?? err?.error?.message ?? 'Failed to pick image');
     }
