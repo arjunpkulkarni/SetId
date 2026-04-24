@@ -3,6 +3,19 @@ import { AppState } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { bills as billsApi, assignments as assignmentsApi, receipts as receiptsApi } from '../services/api';
 
+// Monotonically-increasing client mutation id. Passed with every assignment
+// mutation so the server can echo it in the `assignment_update` broadcast,
+// and the originating client can then drop its own event (it already
+// applied the change optimistically and has the mutation response in hand,
+// so re-processing the broadcast would be pure redundant work — and, at
+// worst, re-order state by racing with a queued sibling mutation).
+let _mutationIdCounter = 0;
+const _clientInstanceId = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+export function newClientMutationId() {
+  _mutationIdCounter += 1;
+  return `${_clientInstanceId}:${_mutationIdCounter}`;
+}
+
 function parsePriceValue(value) {
   const num = typeof value === 'string' ? parseFloat(value) : (value ?? 0);
   return Number.isFinite(num) ? num : 0;
@@ -29,6 +42,10 @@ export function useBillData(billId) {
   const mutationQueueRef = useRef({});
   // Tracks in-flight mutation count so fetchSummary can back off until settled.
   const inFlightMutationsRef = useRef(0);
+  // Set of client_mutation_ids we initiated and are still waiting to see
+  // echoed back on the WS. Echoed events are dropped — we already applied
+  // them locally and have the server response.
+  const ownMutationIdsRef = useRef(new Set());
   
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -191,6 +208,104 @@ export function useBillData(billId) {
     return () => sub.remove();
   }, [fetchSummary]);
 
+  const applyFullAssignmentList = useCallback((serverList) => {
+    setServerAssignments(serverList);
+    const map = {};
+    const idMap = {};
+    (items ?? []).forEach((item) => {
+      map[item.id] = [];
+    });
+    serverList.forEach((a) => {
+      const itemId = a.receipt_item_id;
+      if (!map[itemId]) map[itemId] = [];
+      if (!map[itemId].includes(a.bill_member_id)) {
+        map[itemId].push(a.bill_member_id);
+      }
+      const key = `${itemId}::${a.bill_member_id}`;
+      if (!idMap[key]) idMap[key] = [];
+      idMap[key].push(a.id);
+    });
+    serverAssignmentIds.current = idMap;
+    setAssignmentMap(map);
+  }, [items]);
+
+  /** Apply a compact `assignment_update` delta to local state without a
+   *  REST round-trip. Skips events this client originated (echo suppression).
+   *
+   *  Payload shapes we accept:
+   *    - Delta:        { action: 'added'|'removed'|'updated',
+   *                      receipt_item_id, bill_member_id, assignment_id,
+   *                      client_mutation_id? }
+   *    - Full sync:    { action: 'full_sync', assignments: [...] }
+   *    - Legacy array: [AssignmentOut, ...]  (pre-delta server payload)
+   */
+  const applyAssignmentDelta = useCallback((data) => {
+    if (!data) return;
+
+    const maybeMutationId =
+      data && typeof data === 'object' && !Array.isArray(data)
+        ? data.client_mutation_id
+        : null;
+    if (maybeMutationId && ownMutationIdsRef.current.has(maybeMutationId)) {
+      ownMutationIdsRef.current.delete(maybeMutationId);
+      return;
+    }
+
+    if (Array.isArray(data)) {
+      if (data.length === 0) return;
+      applyFullAssignmentList(data);
+      return;
+    }
+
+    const action = data.action;
+    if (action === 'full_sync') {
+      applyFullAssignmentList(data.assignments ?? []);
+      return;
+    }
+
+    const itemId = data.receipt_item_id;
+    const memberId = data.bill_member_id;
+    const assignmentId = data.assignment_id;
+    if (!itemId || !memberId) return;
+
+    const key = `${itemId}::${memberId}`;
+
+    if (action === 'added') {
+      setAssignmentMap((prev) => {
+        const list = prev[itemId] || [];
+        return {
+          ...prev,
+          [itemId]: list.includes(memberId) ? list : [...list, memberId],
+        };
+      });
+      if (assignmentId) {
+        const existing = serverAssignmentIds.current[key] || [];
+        if (!existing.includes(assignmentId)) {
+          serverAssignmentIds.current[key] = [...existing, assignmentId];
+        }
+      }
+    } else if (action === 'removed') {
+      setAssignmentMap((prev) => {
+        const list = prev[itemId] || [];
+        return {
+          ...prev,
+          [itemId]: list.filter((id) => id !== memberId),
+        };
+      });
+      if (assignmentId) {
+        const remaining = (serverAssignmentIds.current[key] || []).filter(
+          (id) => id !== assignmentId,
+        );
+        serverAssignmentIds.current[key] = remaining;
+      } else {
+        serverAssignmentIds.current[key] = [];
+      }
+    }
+    // `updated` doesn't change the member-chip membership the UI renders,
+    // so nothing to do here for the chip view. Amounts will be picked up
+    // by the next focus refetch or balance screen load.
+  }, [applyFullAssignmentList]);
+
   const handleToggleMember = useCallback((itemId, memberId) => {
     const key = `${itemId}::${memberId}`;
     const currentList = assignmentMap[itemId] || [];
@@ -216,14 +331,29 @@ export function useBillData(billId) {
           const ids = serverAssignmentIds.current[key] || [];
           if (ids.length > 0) {
             await Promise.all(
-              ids.map((id) => assignmentsApi.delete(billId, id).catch(() => null)),
+              ids.map((id) => {
+                const mutationId = newClientMutationId();
+                ownMutationIdsRef.current.add(mutationId);
+                return assignmentsApi
+                  .delete(billId, id, { clientMutationId: mutationId })
+                  .catch(() => {
+                    ownMutationIdsRef.current.delete(mutationId);
+                    return null;
+                  });
+              }),
             );
           }
           serverAssignmentIds.current[key] = [];
         } else {
-          const res = await assignmentsApi.create(billId, [
-            { receipt_item_id: itemId, bill_member_id: memberId, share_type: 'equal', share_value: 0 },
-          ]);
+          const mutationId = newClientMutationId();
+          ownMutationIdsRef.current.add(mutationId);
+          const res = await assignmentsApi.create(
+            billId,
+            [
+              { receipt_item_id: itemId, bill_member_id: memberId, share_type: 'equal', share_value: 0 },
+            ],
+            { clientMutationId: mutationId },
+          );
           const payload = res?.data ?? res;
           const createdList = Array.isArray(payload) ? payload : [payload];
           const newIds = createdList
@@ -251,13 +381,14 @@ export function useBillData(billId) {
 
     mutationQueueRef.current[key] = nextPromise.catch(() => {});
 
+    // NO fetchSummary here. The optimistic update + the server response on
+    // the mutation itself are the source of truth. Broadcasts from other
+    // clients will update via `applyAssignmentDelta`. Any drift will be
+    // reconciled on screen focus / background wake (see effects above).
     nextPromise.finally(() => {
       inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
-      if (inFlightMutationsRef.current === 0) {
-        fetchSummary(true);
-      }
     });
-  }, [assignmentMap, billId, fetchSummary]);
+  }, [assignmentMap, billId]);
 
   return {
     // State
@@ -295,5 +426,6 @@ export function useBillData(billId) {
     handleToggleMember,
     applyServerItemState,
     applyMemberJoined,
+    applyAssignmentDelta,
   };
 }

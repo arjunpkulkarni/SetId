@@ -347,6 +347,7 @@ class CalculationService:
             )
             .all()
         )
+        member_ids = [m.id for m in members]
 
         bill_subtotal = bill.subtotal or Decimal("0")
         bill_tax = bill.tax or Decimal("0")
@@ -356,21 +357,48 @@ class CalculationService:
         if bill_fee == Decimal("0") and bill_subtotal > 0:
             bill_fee = self.calculate_service_fee(bill_id)
 
+        # Aggregate assignment subtotals and succeeded-payment totals per
+        # member in two queries instead of 2×N. On a bill with 10 members
+        # this drops from 20 round-trips to 2.
+        assignment_subtotals: dict[str, Decimal] = {}
+        payment_totals: dict[str, Decimal] = {}
+        if member_ids:
+            from sqlalchemy import func as _func
+
+            assignment_rows = (
+                self.db.query(
+                    ItemAssignment.bill_member_id,
+                    _func.coalesce(_func.sum(ItemAssignment.amount_owed), 0),
+                )
+                .filter(ItemAssignment.bill_member_id.in_(member_ids))
+                .group_by(ItemAssignment.bill_member_id)
+                .all()
+            )
+            for mid, total in assignment_rows:
+                assignment_subtotals[str(mid)] = Decimal(str(total or 0))
+
+            payment_rows = (
+                self.db.query(
+                    Payment.bill_member_id,
+                    _func.coalesce(_func.sum(Payment.amount), 0),
+                )
+                .filter(
+                    Payment.bill_member_id.in_(member_ids),
+                    Payment.status == "succeeded",
+                )
+                .group_by(Payment.bill_member_id)
+                .all()
+            )
+            for mid, total in payment_rows:
+                payment_totals[str(mid)] = Decimal(str(total or 0))
+
         member_breakdowns = []
         total_paid_all = Decimal("0")
         total_remaining_all = Decimal("0")
 
         for member in members:
             is_host = self._is_bill_owner_member(member, bill)
-
-            assignments = (
-                self.db.query(ItemAssignment)
-                .filter(ItemAssignment.bill_member_id == member.id)
-                .all()
-            )
-            subtotal = sum(
-                (a.amount_owed for a in assignments), Decimal("0")
-            )
+            subtotal = assignment_subtotals.get(str(member.id), Decimal("0"))
 
             if bill_subtotal > 0:
                 proportion = subtotal / bill_subtotal
@@ -394,18 +422,7 @@ class CalculationService:
             else:
                 total_owed = subtotal + tax_share + tip_share + fee_share
 
-            succeeded_payments = (
-                self.db.query(Payment)
-                .filter(
-                    Payment.bill_member_id == member.id,
-                    Payment.status == "succeeded",
-                )
-                .all()
-            )
-            total_paid = sum(
-                (p.amount for p in succeeded_payments), Decimal("0")
-            )
-
+            total_paid = payment_totals.get(str(member.id), Decimal("0"))
             remaining = max(total_owed - total_paid, Decimal("0"))
 
             total_paid_all += total_paid

@@ -42,7 +42,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
-    from app.services.ws_manager import bill_ws_manager
+    from app.services.ws_manager import bill_ws_manager, register_main_loop
+
+    # Capture the running loop so sync request handlers can schedule
+    # broadcasts onto it via `schedule_broadcast(...)`. Without this, sync
+    # endpoints would have to rely on BackgroundTasks, which only run after
+    # the response is flushed (added 500-1500ms of fan-out delay).
+    register_main_loop(asyncio.get_running_loop())
 
     sched = None
     if settings.REMINDER_JOB_INTERVAL_SEC > 0:
@@ -67,6 +73,12 @@ async def lifespan(app: FastAPI):
             )
             sched.start()
 
+    # Connect to Redis pub/sub for cross-worker WS fan-out (no-op if
+    # WS_REDIS_URL is unset). Must happen before the heartbeat starts so
+    # remote broadcasts aren't missed during the window after the first
+    # socket connects.
+    await bill_ws_manager.start_redis()
+
     heartbeat_task = asyncio.create_task(bill_ws_manager.start_heartbeat())
 
     yield
@@ -76,6 +88,7 @@ async def lifespan(app: FastAPI):
         await heartbeat_task
     except asyncio.CancelledError:
         pass
+    await bill_ws_manager.stop_redis()
     if sched is not None:
         sched.shutdown(wait=False)
 

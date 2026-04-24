@@ -142,6 +142,13 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str | None = None
     CELERY_RESULT_BACKEND: str | None = None
 
+    # Redis URL for cross-worker WebSocket fan-out. When unset, the
+    # per-bill WS manager is in-process only — safe for a single uvicorn
+    # worker but broadcasts silently drop between workers/instances.
+    # Setting this enables Redis pub/sub as the bus; every worker
+    # subscribes and relays to its locally-connected sockets.
+    WS_REDIS_URL: str | None = None
+
     # Optional LLM pass for item-name normalization (dictionary always runs first).
     RECEIPT_NORMALIZE_USE_LLM: bool = False
 

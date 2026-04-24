@@ -20,7 +20,7 @@ from app.models.item_assignment import ItemAssignment
 from app.models.receipt_item import ReceiptItem
 from app.services.calculation_service import CalculationService
 from app.services.payment_service import PaymentService
-from app.services.ws_manager import bill_ws_manager
+from app.services.ws_manager import bill_ws_manager, schedule_broadcast
 
 router = APIRouter(prefix="/party", tags=["Party (public)"])
 logger = logging.getLogger(__name__)
@@ -39,6 +39,9 @@ class ClaimAction(BaseModel):
 
 class ClaimRequest(BaseModel):
     claims: list[ClaimAction]
+    # Echoed back in the WS broadcast so the originating client can ignore
+    # its own event and keep its already-rendered state.
+    client_mutation_id: str | None = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -132,6 +135,15 @@ async def _broadcast_assignments(bill_id: str) -> None:
         await bill_ws_manager.broadcast(bill_id, "assignment_update", payload)
     except Exception:
         logger.exception("WS broadcast failed for bill %s", bill_id)
+
+
+def _broadcast_delta_now(bill_id: str, payload: dict) -> None:
+    """Fire-and-forget assignment delta on the main loop (same pattern as
+    `assignments.py`). Avoids queuing behind BackgroundTasks, which would
+    delay receivers until after the response has been sent."""
+    if bill_ws_manager.client_count(bill_id) == 0:
+        return
+    schedule_broadcast(bill_ws_manager.broadcast(bill_id, "assignment_update", payload))
 
 
 async def _broadcast_event(bill_id: str, event: str, data: dict) -> None:
@@ -355,6 +367,8 @@ def claim_items(
     member_id_str = str(member.id)
 
     affected_item_ids: set[str] = set()
+    # (action, item_id, assignment_id) tuples for post-commit delta broadcast.
+    deltas: list[tuple[str, str, str]] = []
 
     for claim in body.claims:
         item = (
@@ -385,6 +399,7 @@ def claim_items(
                 db.add(assignment)
                 db.flush()
                 affected_item_ids.add(str(item.id))
+                deltas.append(("added", str(item.id), str(assignment.id)))
 
         elif claim.action == "unclaim":
             existing = (
@@ -396,9 +411,11 @@ def claim_items(
                 .first()
             )
             if existing:
+                existing_id = str(existing.id)
                 db.delete(existing)
                 db.flush()
                 affected_item_ids.add(str(item.id))
+                deltas.append(("removed", str(item.id), existing_id))
 
     for item_id in affected_item_ids:
         item = db.query(ReceiptItem).filter(ReceiptItem.id == item_id).first()
@@ -407,7 +424,20 @@ def claim_items(
 
     db.commit()
 
-    background_tasks.add_task(_broadcast_assignments, bill_id_str)
+    # Emit compact deltas — other guests apply these in place without a full
+    # `/party/:token/receipt` round-trip. The originating client's
+    # `client_mutation_id` is echoed back so it suppresses its own event
+    # (it already has the server response in hand from this HTTP reply).
+    for action, item_id, assignment_id in deltas:
+        payload: dict = {
+            "action": action,
+            "receipt_item_id": item_id,
+            "bill_member_id": member_id_str,
+            "assignment_id": assignment_id,
+        }
+        if body.client_mutation_id is not None:
+            payload["client_mutation_id"] = body.client_mutation_id
+        _broadcast_delta_now(bill_id_str, payload)
 
     members = (
         db.query(BillMember)

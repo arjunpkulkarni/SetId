@@ -257,7 +257,6 @@ def get_bill_summary(
     bill_svc = BillService(db)
     receipt_svc = ReceiptParserService(db)
     calc_svc = CalculationService(db)
-    payment_svc = PaymentService(db)
 
     bill = bill_svc.get_bill(str(bill_id))
     if not bill:
@@ -265,15 +264,19 @@ def get_bill_summary(
 
     members = bill_svc.get_members(str(bill_id))
     items = receipt_svc.get_items(str(bill_id))
-    assignments = calc_svc.get_assignments(str(bill_id))
-    payments = payment_svc.get_bill_payments(str(bill_id))
 
-    total_assigned = sum((a.amount_owed for a in assignments), Decimal("0"))
+    # Single balance breakdown call — it already walks assignments and
+    # payments internally. Deriving `total_assigned` from its member
+    # subtotals avoids a second pass over `ItemAssignment` rows (which was
+    # doubling the query count per `/summary` hit and, on hot paths like
+    # post-mutation refetch, visibly slowing the UI).
+    breakdown = calc_svc.get_balance_breakdown(str(bill_id))
+    total_assigned = sum(
+        (mb["subtotal"] for mb in breakdown["members"]),
+        Decimal("0"),
+    )
     bill_subtotal = bill.subtotal or Decimal("0")
     total_unassigned = bill_subtotal - total_assigned
-
-    # Use balance breakdown so host (paid upfront) is excluded from remaining
-    breakdown = calc_svc.get_balance_breakdown(str(bill_id))
     total_paid = breakdown["total_paid"]
     total_remaining = breakdown["total_remaining"]
 

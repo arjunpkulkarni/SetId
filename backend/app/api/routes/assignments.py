@@ -6,6 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.db.session import SessionLocal, get_db
 from app.models.bill import Bill
 from app.models.user import User
@@ -17,14 +18,29 @@ from app.schemas.item_assignment import (
     AutoSplitRequest,
 )
 from app.services.calculation_service import CalculationService
-from app.services.payment_notification_service import PaymentNotificationService
-from app.services.ws_manager import bill_ws_manager
+from app.services.ws_manager import bill_ws_manager, schedule_broadcast
 
 router = APIRouter(prefix="/bills/{bill_id}", tags=["Assignments"])
 logger = logging.getLogger(__name__)
 
 
-def _schedule_payment_sms(bill_id: str, owner_id: str) -> None:
+def _dispatch_payment_sms(bill_id: str, owner_id: str) -> None:
+    """Fan out payment-request SMS. Uses Celery when a broker is configured so
+    we never tie up the HTTP worker on Twilio latency."""
+    if settings.CELERY_BROKER_URL:
+        try:
+            from app.celery_app import celery_app
+
+            celery_app.send_task(
+                "notifications.request_payment_sms",
+                kwargs={"bill_id": bill_id, "owner_id": owner_id},
+            )
+            return
+        except Exception:
+            logger.exception("Celery dispatch failed; running SMS inline for bill %s", bill_id)
+
+    from app.services.payment_notification_service import PaymentNotificationService
+
     db = SessionLocal()
     try:
         PaymentNotificationService(db).sync_request_sms_for_bill(bill_id, owner_id)
@@ -34,16 +50,13 @@ def _schedule_payment_sms(bill_id: str, owner_id: str) -> None:
         db.close()
 
 
-async def _broadcast_delta(
-    bill_id: str,
+def _delta_payload(
     action: str,
     receipt_item_id: str | None = None,
     bill_member_id: str | None = None,
     assignment_id: str | None = None,
-) -> None:
-    """Send a compact delta to connected WS clients instead of the full list."""
-    if bill_ws_manager.client_count(bill_id) == 0:
-        return
+    client_mutation_id: str | None = None,
+) -> dict:
     payload: dict = {"action": action}
     if receipt_item_id is not None:
         payload["receipt_item_id"] = receipt_item_id
@@ -51,32 +64,47 @@ async def _broadcast_delta(
         payload["bill_member_id"] = bill_member_id
     if assignment_id is not None:
         payload["assignment_id"] = assignment_id
-    try:
-        await bill_ws_manager.broadcast(bill_id, "assignment_update", payload)
-    except Exception:
-        logger.exception("WS delta broadcast failed for bill %s", bill_id)
+    if client_mutation_id is not None:
+        payload["client_mutation_id"] = client_mutation_id
+    return payload
 
 
-def _load_full_sync_payload(bill_id: str) -> dict:
+def _broadcast_delta_now(bill_id: str, payload: dict) -> None:
+    """Fire an `assignment_update` broadcast without waiting for BackgroundTasks.
+
+    BackgroundTasks run *after* the response is sent and behind any other
+    queued task (e.g. the Twilio SMS fan-out), which used to add 500-1500ms
+    of latency before receivers saw the change. Scheduling onto the running
+    loop means the broadcast leaves the server on the same tick as the
+    response."""
+    if bill_ws_manager.client_count(bill_id) == 0:
+        return
+    schedule_broadcast(bill_ws_manager.broadcast(bill_id, "assignment_update", payload))
+
+
+def _load_full_sync_payload(bill_id: str, client_mutation_id: str | None = None) -> dict:
     """Synchronously load the full assignment list for a bill (run in a threadpool)."""
     db = SessionLocal()
     try:
         svc = CalculationService(db)
         assignments = svc.get_assignments(bill_id)
-        return {
+        payload: dict = {
             "action": "full_sync",
             "assignments": [_assignment_out(a) for a in assignments],
         }
+        if client_mutation_id is not None:
+            payload["client_mutation_id"] = client_mutation_id
+        return payload
     finally:
         db.close()
 
 
-async def _broadcast_full_sync(bill_id: str) -> None:
+async def _broadcast_full_sync(bill_id: str, client_mutation_id: str | None = None) -> None:
     """Send the entire assignment list (used after bulk operations like auto-split)."""
     if bill_ws_manager.client_count(bill_id) == 0:
         return
     try:
-        payload = await asyncio.to_thread(_load_full_sync_payload, bill_id)
+        payload = await asyncio.to_thread(_load_full_sync_payload, bill_id, client_mutation_id)
         await bill_ws_manager.broadcast(bill_id, "assignment_update", payload)
     except Exception:
         logger.exception("WS full_sync broadcast failed for bill %s", bill_id)
@@ -114,15 +142,6 @@ def create_assignments(
     except ValueError as e:
         return error_response("BAD_REQUEST", str(e), 400)
 
-    if body.send_payment_notifications:
-        bill = db.query(Bill).filter(Bill.id == bill_id).first()
-        if bill and str(bill.owner_id) == str(current_user.id):
-            background_tasks.add_task(
-                _schedule_payment_sms,
-                str(bill_id),
-                str(current_user.id),
-            )
-
     # Refresh relationships for serialization
     for a in assignments:
         db.refresh(a)
@@ -132,15 +151,27 @@ def create_assignments(
         a.member_nickname = a.member.nickname if a.member else None
         results.append(AssignmentOut.model_validate(a).model_dump())
 
+    # Broadcast BEFORE scheduling SMS so the fan-out never delays the WS frame.
     for r in results:
-        background_tasks.add_task(
-            _broadcast_delta,
+        _broadcast_delta_now(
             str(bill_id),
-            "added",
-            str(r.get("receipt_item_id", "")),
-            str(r.get("bill_member_id", "")),
-            str(r.get("id", "")),
+            _delta_payload(
+                "added",
+                str(r.get("receipt_item_id", "")),
+                str(r.get("bill_member_id", "")),
+                str(r.get("id", "")),
+                body.client_mutation_id,
+            ),
         )
+
+    if body.send_payment_notifications:
+        bill = db.query(Bill).filter(Bill.id == bill_id).first()
+        if bill and str(bill.owner_id) == str(current_user.id):
+            background_tasks.add_task(
+                _dispatch_payment_sms,
+                str(bill_id),
+                str(current_user.id),
+            )
 
     return success_response(data=results, message="Assignments created")
 
@@ -189,13 +220,15 @@ def update_assignment(
     assignment.item_name = assignment.item.name if assignment.item else None
     assignment.member_nickname = assignment.member.nickname if assignment.member else None
 
-    background_tasks.add_task(
-        _broadcast_delta,
+    _broadcast_delta_now(
         str(bill_id),
-        "updated",
-        str(assignment.receipt_item_id),
-        str(assignment.bill_member_id),
-        str(assignment.id),
+        _delta_payload(
+            "updated",
+            str(assignment.receipt_item_id),
+            str(assignment.bill_member_id),
+            str(assignment.id),
+            body.client_mutation_id,
+        ),
     )
 
     return success_response(
@@ -211,6 +244,7 @@ def delete_assignment(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    client_mutation_id: str | None = None,
 ):
     svc = CalculationService(db)
     from app.models.item_assignment import ItemAssignment
@@ -225,13 +259,15 @@ def delete_assignment(
     except ValueError:
         return error_response("NOT_FOUND", "Assignment not found", 404)
 
-    background_tasks.add_task(
-        _broadcast_delta,
+    _broadcast_delta_now(
         str(bill_id),
-        "removed",
-        item_id,
-        member_id,
-        str(assignment_id),
+        _delta_payload(
+            "removed",
+            item_id,
+            member_id,
+            str(assignment_id),
+            client_mutation_id,
+        ),
     )
 
     return success_response(message="Assignment deleted")
@@ -249,15 +285,6 @@ def auto_split(
     member_ids = [str(mid) for mid in body.member_ids] if body.member_ids else None
     assignments = svc.auto_split(str(bill_id), member_ids)
 
-    if body.send_payment_notifications:
-        bill = db.query(Bill).filter(Bill.id == bill_id).first()
-        if bill and str(bill.owner_id) == str(current_user.id):
-            background_tasks.add_task(
-                _schedule_payment_sms,
-                str(bill_id),
-                str(current_user.id),
-            )
-
     # Refresh relationships for serialization
     for a in assignments:
         db.refresh(a)
@@ -267,7 +294,17 @@ def auto_split(
         a.member_nickname = a.member.nickname if a.member else None
         results.append(AssignmentOut.model_validate(a).model_dump())
 
-    background_tasks.add_task(_broadcast_full_sync, str(bill_id))
+    # Fire full-sync first (bulk op — a single frame is cheaper than N deltas).
+    background_tasks.add_task(_broadcast_full_sync, str(bill_id), body.client_mutation_id)
+
+    if body.send_payment_notifications:
+        bill = db.query(Bill).filter(Bill.id == bill_id).first()
+        if bill and str(bill.owner_id) == str(current_user.id):
+            background_tasks.add_task(
+                _dispatch_payment_sms,
+                str(bill_id),
+                str(current_user.id),
+            )
 
     return success_response(data=results, message="Auto-split completed")
 

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { getReceipt, claimItems, buildPartyWsUrl } from '../services/api';
+import { getReceipt, claimItems, buildPartyWsUrl, newClientMutationId } from '../services/api';
 import { formatCurrency } from '../utils/formatters';
 import LoadingSpinner from '../components/LoadingSpinner';
 import './PartyReceiptPage.css';
@@ -19,6 +19,16 @@ export default function PartyReceiptPage() {
   const [error, setError] = useState(null);
   const wsRef = useRef(null);
   const pollRef = useRef(null);
+  // Set of client_mutation_ids this tab initiated. Echoed broadcasts that
+  // carry one of these are ignored — the tab already has the up-to-date
+  // receipt from the POST /claim response and doesn't need to refetch.
+  const ownMutationIdsRef = useRef(new Set());
+  // Live receipt ref so the WS handler can patch state without triggering
+  // a re-render through the effect's dependency list.
+  const receiptRef = useRef(null);
+  useEffect(() => {
+    receiptRef.current = receipt;
+  }, [receipt]);
 
   const fetchReceipt = useCallback(async () => {
     console.log('[API] GET /party/' + token + '/receipt');
@@ -37,11 +47,84 @@ export default function PartyReceiptPage() {
 
   useEffect(() => { fetchReceipt(); }, [fetchReceipt]);
 
-  // WebSocket for real-time updates; falls back to polling every 5s
+  /** Apply a compact assignment delta directly to the current receipt,
+   *  mirroring the `claim_by` list the server would return. Echo-suppressed
+   *  for events this tab originated (identified by `client_mutation_id`). */
+  const applyAssignmentDelta = useCallback((data) => {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+    if (data.client_mutation_id && ownMutationIdsRef.current.has(data.client_mutation_id)) {
+      ownMutationIdsRef.current.delete(data.client_mutation_id);
+      return;
+    }
+    if (data.action === 'full_sync') {
+      fetchReceipt();
+      return;
+    }
+    const { action, receipt_item_id, bill_member_id, assignment_id } = data;
+    if (!action || !receipt_item_id || !bill_member_id) return;
+
+    setReceipt((prev) => {
+      if (!prev) return prev;
+      const items = prev.items || [];
+      const nextItems = items.map((item) => {
+        if (item.id !== receipt_item_id) return item;
+        const claimedBy = item.claimed_by || [];
+        if (action === 'added') {
+          if (claimedBy.some((c) => c.member_id === bill_member_id)) return item;
+          return {
+            ...item,
+            claimed_by: [
+              ...claimedBy,
+              {
+                member_id: bill_member_id,
+                // The delta intentionally doesn't ship nickname/amount — we
+                // leave them undefined here; a follow-up fetchReceipt on
+                // focus or a subsequent claim response will fill them in.
+                assignment_id,
+                share_type: 'equal',
+                amount_owed: '0',
+              },
+            ],
+          };
+        }
+        if (action === 'removed') {
+          return {
+            ...item,
+            claimed_by: claimedBy.filter((c) =>
+              assignment_id ? c.assignment_id !== assignment_id : c.member_id !== bill_member_id,
+            ),
+          };
+        }
+        return item;
+      });
+      return { ...prev, items: nextItems };
+    });
+  }, [fetchReceipt]);
+
+  // WebSocket for real-time updates; polls as a fallback ONLY while we
+  // don't have an open socket.
   useEffect(() => {
     let ws;
-    let wsConnected = false;
+    const wsConnectedRef = { current: false };
     const wsUrl = buildPartyWsUrl(token);
+
+    const startPolling = () => {
+      if (pollRef.current) return;
+      console.log('[WS] ⏱️ Starting 5s polling fallback');
+      pollRef.current = setInterval(() => {
+        // Re-check the ref each tick — the original code captured
+        // `wsConnected` via closure and kept polling forever even after
+        // the WS opened.
+        if (!wsConnectedRef.current) fetchReceipt();
+      }, 5000);
+    };
+
+    const stopPolling = () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
 
     console.log('[WS] Attempting to connect:', wsUrl);
 
@@ -51,23 +134,31 @@ export default function PartyReceiptPage() {
       ws.onopen = (event) => {
         console.log('[WS] ✅ Connected:', event);
         wsRef.current = ws;
-        wsConnected = true;
-        clearInterval(pollRef.current);
-        pollRef.current = null;
+        wsConnectedRef.current = true;
+        stopPolling();
       };
 
       ws.onmessage = (event) => {
-        console.log('[WS] 📩 Raw message received:', event.data);
         try {
           const msg = JSON.parse(event.data);
-          console.log('[WS] 📨 Parsed message:', msg);
-          console.log('[WS] 🏷️  Message type:', msg.type);
+          const { type, data } = msg;
 
-          if (msg.type === 'assignment_update' || msg.type === 'member_joined' || msg.type === 'payment_complete') {
-            console.log('[WS] ✨ Recognized event — refreshing receipt');
+          // Server-originated heartbeat. Mirror it back so our
+          // bidirectional liveness check on the server side stays happy.
+          if (type === 'ping') {
+            try { ws.send(JSON.stringify({ type: 'pong' })); } catch {}
+            return;
+          }
+          if (type === 'pong') return;
+
+          if (type === 'assignment_update') {
+            applyAssignmentDelta(data);
+            return;
+          }
+          if (type === 'member_joined' || type === 'payment_complete') {
+            // These don't fit cleanly into a delta — fetch once.
             fetchReceipt();
-          } else {
-            console.log('[WS] ⚠️ Unknown event type, not refreshing:', msg.type);
+            return;
           }
         } catch (err) {
           console.error('[WS] ❌ Failed to parse message:', err, event.data);
@@ -79,41 +170,43 @@ export default function PartyReceiptPage() {
       };
 
       ws.onclose = (event) => {
-        console.log('[WS] 🔌 Closed:', { code: event.code, reason: event.reason, wasClean: event.wasClean });
+        console.log('[WS] 🔌 Closed:', { code: event.code, reason: event.reason });
         wsRef.current = null;
-        wsConnected = false;
-        if (!pollRef.current) {
-          console.log('[WS] ⏱️ Starting 5s polling fallback');
-          pollRef.current = setInterval(fetchReceipt, 5000);
-        }
+        wsConnectedRef.current = false;
+        startPolling();
       };
     } catch (err) {
       console.error('[WS] ❌ Failed to create WebSocket:', err);
+      startPolling();
     }
 
-    // Start polling immediately as fallback until WebSocket connects
-    pollRef.current = setInterval(() => {
-      if (!wsConnected) {
-        console.log('[Poll] Fetching receipt (WS not connected)');
-        fetchReceipt();
-      }
-    }, 5000);
+    // Start polling IMMEDIATELY as fallback until the WS opens. Once
+    // `onopen` fires it clears the interval; if the WS never opens we
+    // keep polling forever.
+    startPolling();
 
     return () => {
       console.log('[WS] Cleanup — closing WebSocket and clearing poll');
+      stopPolling();
       ws?.close();
-      clearInterval(pollRef.current);
     };
-  }, [token, fetchReceipt]);
+  }, [token, fetchReceipt, applyAssignmentDelta]);
 
   const handleClaim = async (itemId, action) => {
-    console.log('[API] POST /party/' + token + '/claim', { receipt_item_id: itemId, action });
+    const mutationId = newClientMutationId();
+    ownMutationIdsRef.current.add(mutationId);
+    console.log('[API] POST /party/' + token + '/claim', { receipt_item_id: itemId, action, mutationId });
     setClaiming(itemId);
     try {
-      const data = await claimItems(token, [{ receipt_item_id: itemId, action }]);
+      const data = await claimItems(
+        token,
+        [{ receipt_item_id: itemId, action }],
+        { clientMutationId: mutationId },
+      );
       console.log('[API] ✅ Claim response:', data);
       setReceipt(data);
     } catch (err) {
+      ownMutationIdsRef.current.delete(mutationId);
       console.error('[API] ❌ Claim error:', err);
       setError(err.message);
     } finally {

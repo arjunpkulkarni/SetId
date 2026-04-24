@@ -14,11 +14,16 @@ class AssignmentCreate(BaseModel):
 class AssignmentBulkCreate(BaseModel):
     assignments: list[AssignmentCreate]
     send_payment_notifications: bool = True
+    # Client-generated id echoed back in the WS broadcast so the originating
+    # client can suppress its own event (avoiding a redundant refetch that
+    # would clobber the optimistic UI update).
+    client_mutation_id: str | None = None
 
 
 class AssignmentUpdate(BaseModel):
     share_type: str | None = None
     share_value: Decimal | None = None
+    client_mutation_id: str | None = None
 
 
 class AssignmentOut(BaseModel):
@@ -37,3 +42,4 @@ class AssignmentOut(BaseModel):
 class AutoSplitRequest(BaseModel):
     member_ids: list[uuid.UUID] | None = None
     send_payment_notifications: bool = True
+    client_mutation_id: str | None = None

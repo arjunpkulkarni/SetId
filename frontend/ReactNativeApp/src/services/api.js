@@ -268,21 +268,36 @@ export const receipts = {
 };
 
 // ─── Assignments ─────────────────────────────────────────────────────────────
+//
+// `clientMutationId` (optional) is echoed back in the `assignment_update`
+// WebSocket broadcast so the originating client can ignore its own event
+// (see `useBillData.applyAssignmentDelta`). This is how we keep the
+// optimistic UI from being clobbered 50-200ms later by the server's own
+// broadcast.
 export const assignments = {
   list: (billId) => client.get(`/bills/${billId}/assignments`),
 
-  create: (billId, assignmentsList) =>
-    client.post(`/bills/${billId}/assignments`, { assignments: assignmentsList }),
+  create: (billId, assignmentsList, { clientMutationId } = {}) =>
+    client.post(`/bills/${billId}/assignments`, {
+      assignments: assignmentsList,
+      ...(clientMutationId ? { client_mutation_id: clientMutationId } : {}),
+    }),
 
-  update: (billId, assignmentId, fields) =>
-    client.patch(`/bills/${billId}/assignments/${assignmentId}`, fields),
+  update: (billId, assignmentId, fields, { clientMutationId } = {}) =>
+    client.patch(`/bills/${billId}/assignments/${assignmentId}`, {
+      ...fields,
+      ...(clientMutationId ? { client_mutation_id: clientMutationId } : {}),
+    }),
 
-  delete: (billId, assignmentId) =>
-    client.delete(`/bills/${billId}/assignments/${assignmentId}`),
+  delete: (billId, assignmentId, { clientMutationId } = {}) =>
+    client.delete(`/bills/${billId}/assignments/${assignmentId}`, {
+      params: clientMutationId ? { client_mutation_id: clientMutationId } : undefined,
+    }),
 
-  autoSplit: (billId, memberIds) =>
+  autoSplit: (billId, memberIds, { clientMutationId } = {}) =>
     client.post(`/bills/${billId}/assignments/auto-split`, {
       member_ids: memberIds,
+      ...(clientMutationId ? { client_mutation_id: clientMutationId } : {}),
     }),
 
   recalculate: (billId) => client.post(`/bills/${billId}/recalculate`),

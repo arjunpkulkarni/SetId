@@ -8,8 +8,13 @@ const MAX_RECONNECT_DELAY = 30000;
 // RN's WebSocket doesn't notice a half-dead socket — readyState stays OPEN
 // forever. We detect this at the app layer by tracking the last inbound frame
 // and forcing a reconnect when the server has been silent too long.
+// With the server heartbeat at 15s and per-socket concurrent pings, a
+// single dropped frame no longer delays others. Giving the liveness
+// check a 60s window means we don't force-reconnect on a single missed
+// heartbeat, which was causing brief offline windows where broadcasts
+// were lost and updates "arrived late in a burst".
 const PING_INTERVAL_MS = 20000;
-const LIVENESS_TIMEOUT_MS = 45000;
+const LIVENESS_TIMEOUT_MS = 60000;
 
 export default function useBillWebSocket(billId, handlers = {}) {
   const ws = useRef(null);

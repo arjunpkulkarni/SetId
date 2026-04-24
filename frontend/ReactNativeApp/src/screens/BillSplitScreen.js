@@ -105,6 +105,7 @@ export default function BillSplitScreen({ navigation, route }) {
     handleToggleMember,
     applyServerItemState,
     applyMemberJoined,
+    applyAssignmentDelta,
   } = useBillData(billId);
 
   const [saving, setSaving] = useState(false);
@@ -128,18 +129,12 @@ export default function BillSplitScreen({ navigation, route }) {
     },
     onAssignmentUpdate: (data) => {
       if (__DEV__) console.log('[WS] assignment_update received', data);
-      // Guard against no-op broadcasts that used to come out of edge paths
-      // (e.g. the old `_broadcast_assignments` on join). An empty array or a
-      // payload without either an `action` field or any items means nothing
-      // actually changed — don't waste a round-trip re-fetching.
-      const isEmptyArray = Array.isArray(data) && data.length === 0;
-      const hasAction = data && typeof data === 'object' && !Array.isArray(data)
-        ? !!data.action
-        : false;
-      if (isEmptyArray || (!hasAction && !Array.isArray(data))) {
-        return;
-      }
-      fetchSummary(true);
+      // Apply the delta directly. This used to fire `fetchSummary(true)` —
+      // which does two REST round-trips AND overwrites the optimistic
+      // toggle state with whatever the server returned, producing the
+      // "checkboxes flicker 500ms after tapping" feel. Echo suppression
+      // for self-originated events is handled inside `applyAssignmentDelta`.
+      applyAssignmentDelta(data);
     },
     onMemberJoined: (data) => {
       if (__DEV__) console.log('[WS] member_joined:', data?.nickname ?? data);
@@ -159,7 +154,7 @@ export default function BillSplitScreen({ navigation, route }) {
     onAuthError: (code) => {
       if (__DEV__) console.warn('[WS] Auth error, code:', code);
     },
-  }), [billId, fetchSummary, applyMemberJoined]);
+  }), [billId, fetchSummary, applyMemberJoined, applyAssignmentDelta]);
 
   const { connected: wsConnected } = useBillWebSocket(billId, wsHandlers);
 

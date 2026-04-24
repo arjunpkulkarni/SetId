@@ -22,11 +22,25 @@ export const getReceipt = async (inviteToken) => {
   return body.data ?? body;
 };
 
-export const claimItems = async (inviteToken, claims) => {
+// Monotonically-increasing id per tab so the server can echo it in the
+// `assignment_update` broadcast and we can drop our own events — prevents
+// the "claim → delta arrives → re-fetch → overwrite optimistic state"
+// race that made the guest page feel glitchy.
+let _webMutationCounter = 0;
+const _webInstanceId = `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+export function newClientMutationId() {
+  _webMutationCounter += 1;
+  return `${_webInstanceId}:${_webMutationCounter}`;
+}
+
+export const claimItems = async (inviteToken, claims, { clientMutationId } = {}) => {
   const res = await fetch(`${API_BASE_URL}/party/${inviteToken}/claim`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ claims }),
+    body: JSON.stringify({
+      claims,
+      ...(clientMutationId ? { client_mutation_id: clientMutationId } : {}),
+    }),
   });
   if (!res.ok) throw await buildError(res, 'Failed to update claims');
   const body = await res.json();
