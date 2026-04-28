@@ -590,6 +590,7 @@ export default function BillSplitScreen({ navigation, route }) {
   }
 
   const detectedTip = parsePriceValue(bill.tip);
+  const canEvenSplit = members.length > 1;
   const tipOptions = detectedTip > 0
     ? [
         { mode: 'proportional', label: 'Split proportionally', helper: 'Guests share tip based on their item subtotal.' },
@@ -638,27 +639,29 @@ export default function BillSplitScreen({ navigation, route }) {
               <View style={styles.assignHeader}>
                 <Text style={styles.assignTitle}>Assign Items</Text>
                 <View style={styles.assignActions}>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={handleEvenSplit}
-                    disabled={autoSplitting || isEditingItems || savingItemEdits}
-                  >
-                    <View
-                      style={[
-                        styles.evenSplitButton,
-                        (autoSplitting || isEditingItems || savingItemEdits) && styles.headerButtonDisabled,
-                      ]}
+                  {canEvenSplit && (
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={handleEvenSplit}
+                      disabled={autoSplitting || isEditingItems || savingItemEdits}
                     >
-                      {autoSplitting ? (
-                        <ActivityIndicator size="small" color={colors.secondary} />
-                      ) : (
-                        <>
-                          <MaterialIcons name="call-split" size={16} color={colors.secondary} />
-                          <Text style={styles.evenSplitButtonText}>Even Split</Text>
-                        </>
-                      )}
-                    </View>
-                  </TouchableOpacity>
+                      <View
+                        style={[
+                          styles.evenSplitButton,
+                          (autoSplitting || isEditingItems || savingItemEdits) && styles.headerButtonDisabled,
+                        ]}
+                      >
+                        {autoSplitting ? (
+                          <ActivityIndicator size="small" color={colors.secondary} />
+                        ) : (
+                          <>
+                            <MaterialIcons name="call-split" size={16} color={colors.secondary} />
+                            <Text style={styles.evenSplitButtonText}>Even Split</Text>
+                          </>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  )}
                   {isEditingItems && (
                     <TouchableOpacity
                       activeOpacity={0.85}
