@@ -266,7 +266,11 @@ export default function ScanReceiptScreen({ navigation, route }) {
       setParsing(false);
 
       setTimeout(() => {
-        navigation.navigate('BillSplit', { billId, refresh: Date.now() });
+        navigation.navigate('BillSplit', {
+          billId,
+          refresh: Date.now(),
+          showTipConfirmation: true,
+        });
       }, 800);
     } catch (err) {
       setUploading(false);

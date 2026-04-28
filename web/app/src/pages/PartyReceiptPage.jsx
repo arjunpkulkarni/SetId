@@ -1,6 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { getReceipt, claimItems, buildPartyWsUrl, newClientMutationId } from '../services/api';
+import {
+  getReceipt,
+  claimItems,
+  evenSplitReceipt,
+  buildPartyWsUrl,
+  newClientMutationId,
+} from '../services/api';
 import { formatCurrency } from '../utils/formatters';
 import LoadingSpinner from '../components/LoadingSpinner';
 import './PartyReceiptPage.css';
@@ -16,6 +22,7 @@ export default function PartyReceiptPage() {
   const [receipt, setReceipt] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [splittingEvenly, setSplittingEvenly] = useState(false);
   const wsRef = useRef(null);
   const pollRef = useRef(null);
   // Set of client_mutation_ids this tab initiated. Echoed broadcasts that
@@ -169,7 +176,11 @@ export default function PartyReceiptPage() {
           // Server-originated heartbeat. Mirror it back so our
           // bidirectional liveness check on the server side stays happy.
           if (type === 'ping') {
-            try { ws.send(JSON.stringify({ type: 'pong' })); } catch {}
+            try {
+              ws.send(JSON.stringify({ type: 'pong' }));
+            } catch (err) {
+              console.warn('[WS] Failed to send pong:', err);
+            }
             return;
           }
           if (type === 'pong') return;
@@ -295,6 +306,25 @@ export default function PartyReceiptPage() {
     mutationQueueRef.current[itemId] = next.catch(() => {});
   }, [token, optimisticallyToggleClaim, fetchReceipt]);
 
+  const handleEvenSplit = useCallback(async () => {
+    const mutationId = newClientMutationId();
+    ownMutationIdsRef.current.add(mutationId);
+    setSplittingEvenly(true);
+
+    try {
+      const data = await evenSplitReceipt(token, { clientMutationId: mutationId });
+      setReceipt(data);
+      setError(null);
+    } catch (err) {
+      ownMutationIdsRef.current.delete(mutationId);
+      console.error('[API] ❌ Even split error:', err);
+      setError(err.message);
+      fetchReceipt();
+    } finally {
+      setSplittingEvenly(false);
+    }
+  }, [token, fetchReceipt]);
+
   const handleContinue = () => {
     navigate(`${basePath}/${token}/pay`, {
       state: { memberName, billTitle: title },
@@ -341,6 +371,16 @@ export default function PartyReceiptPage() {
 
         {error && (
           <div className="receipt-inline-error" role="alert">{error}</div>
+        )}
+
+        {items.length > 0 && (
+          <button
+            className="even-split-btn"
+            onClick={handleEvenSplit}
+            disabled={splittingEvenly}
+          >
+            {splittingEvenly ? 'Splitting...' : 'Even split with everyone'}
+          </button>
         )}
 
         <div className="items-card">

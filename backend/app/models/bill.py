@@ -25,6 +25,7 @@ class Bill(Base):
     subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     tax: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     tip: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    tip_split_mode: Mapped[str] = mapped_column(String(20), default="proportional")
     service_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     service_fee_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     service_fee_percentage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,12 +9,15 @@ import {
   Alert,
   Share,
   RefreshControl,
+  Modal,
+  TextInput,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, shadows } from '../theme';
 import {
+  bills as billsApi,
   receipts as receiptsApi,
   members as membersApi,
   stripeConnect,
@@ -51,6 +54,13 @@ function formatPriceInput(value) {
   return (parseInt(digitsOnly, 10) / 100).toFixed(2);
 }
 
+function cleanMoneyText(value) {
+  const cleaned = `${value ?? ''}`.replace(/[^0-9.]/g, '');
+  const [whole, ...rest] = cleaned.split('.');
+  const decimals = rest.join('').slice(0, 2);
+  return rest.length > 0 ? `${whole}.${decimals}` : whole;
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
@@ -72,6 +82,7 @@ function isDraftItemId(itemId) {
 export default function BillSplitScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const billId = route?.params?.billId;
+  const shouldShowTipConfirmation = !!route?.params?.showTipConfirmation;
   
   // Use the custom hook for bill data management
   const {
@@ -109,6 +120,22 @@ export default function BillSplitScreen({ navigation, route }) {
   } = useBillData(billId);
 
   const [saving, setSaving] = useState(false);
+  const [showTipConfirm, setShowTipConfirm] = useState(false);
+  const [tipMode, setTipMode] = useState(null);
+  const [tipInput, setTipInput] = useState('');
+  const [savingTip, setSavingTip] = useState(false);
+  const tipPromptShownRef = useRef(false);
+
+  useEffect(() => {
+    if (!bill || !shouldShowTipConfirmation || tipPromptShownRef.current) return;
+
+    const detectedTip = parsePriceValue(bill.tip);
+    setTipInput(detectedTip > 0 ? detectedTip.toFixed(2) : '');
+    setTipMode(detectedTip > 0 ? (bill.tip_split_mode || 'proportional') : null);
+    setShowTipConfirm(true);
+    tipPromptShownRef.current = true;
+    navigation.setParams?.({ showTipConfirmation: false });
+  }, [bill, navigation, shouldShowTipConfirmation]);
 
 
   // ─── WebSocket: real-time updates ───────────────────────────────────────────
@@ -421,6 +448,33 @@ export default function BillSplitScreen({ navigation, route }) {
     }
   };
 
+  const handleConfirmTip = useCallback(async () => {
+    if (!tipMode) {
+      Alert.alert('Choose a tip option', 'Select how the tip should be handled.');
+      return;
+    }
+
+    const tipAmount = tipMode === 'no_tip' ? 0 : parsePriceValue(tipInput);
+    if (tipMode !== 'no_tip' && tipAmount <= 0) {
+      Alert.alert('Enter tip amount', 'Add the tip amount the host paid.');
+      return;
+    }
+
+    setSavingTip(true);
+    try {
+      await billsApi.update(billId, {
+        tip: tipAmount.toFixed(2),
+        tip_split_mode: tipMode,
+      });
+      await fetchSummary(true);
+      setShowTipConfirm(false);
+    } catch (err) {
+      Alert.alert('Could not save tip', err?.message ?? err?.error?.message ?? 'Please try again.');
+    } finally {
+      setSavingTip(false);
+    }
+  }, [billId, fetchSummary, tipInput, tipMode]);
+
   const handleSend = async () => {
     if (isEditingItems || savingItemEdits) {
       Alert.alert('Save items first', 'Tap Done to save your receipt edits before sending to members.');
@@ -490,6 +544,19 @@ export default function BillSplitScreen({ navigation, route }) {
       </View>
     );
   }
+
+  const detectedTip = parsePriceValue(bill.tip);
+  const tipOptions = detectedTip > 0
+    ? [
+        { mode: 'proportional', label: 'Split proportionally', helper: 'Guests share tip based on their item subtotal.' },
+        { mode: 'host_covered', label: 'Host covered tip', helper: 'Keep the paid tip on the bill, but do not charge guests for it.' },
+        { mode: 'no_tip', label: 'No tip', helper: 'Set tip to $0.00.' },
+      ]
+    : [
+        { mode: 'proportional', label: 'Add tip and split proportionally', helper: 'Guests share tip based on their item subtotal.' },
+        { mode: 'host_covered', label: 'Host covered tip', helper: 'Record the tip without charging guests for it.' },
+        { mode: 'no_tip', label: 'No tip', helper: 'No tip was paid.' },
+      ];
 
   return (
     <View style={styles.root}>
@@ -616,6 +683,79 @@ export default function BillSplitScreen({ navigation, route }) {
           isHost={true}
         />
       )}
+
+      <Modal
+        visible={showTipConfirm}
+        animationType="fade"
+        transparent
+        onRequestClose={() => {}}
+      >
+        <View style={styles.tipModalBackdrop}>
+          <View style={styles.tipModalCard}>
+            <View style={styles.tipModalIcon}>
+              <MaterialIcons name="payments" size={24} color={colors.onSecondaryContainer} />
+            </View>
+            <Text style={styles.tipModalTitle}>
+              {detectedTip > 0 ? `Tip detected: ${formatCurrency(detectedTip)}` : 'Was tip paid?'}
+            </Text>
+            <Text style={styles.tipModalSubtitle}>
+              Confirm this now so guests know exactly what they are covering.
+            </Text>
+
+            <View style={styles.tipOptions}>
+              {tipOptions.map((option) => {
+                const selected = tipMode === option.mode;
+                return (
+                  <TouchableOpacity
+                    key={option.mode}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      setTipMode(option.mode);
+                      if (option.mode === 'no_tip') setTipInput('0.00');
+                    }}
+                    style={[styles.tipOption, selected && styles.tipOptionSelected]}
+                  >
+                    <View style={[styles.tipOptionRadio, selected && styles.tipOptionRadioSelected]}>
+                      {selected && <View style={styles.tipOptionRadioDot} />}
+                    </View>
+                    <View style={styles.tipOptionCopy}>
+                      <Text style={styles.tipOptionLabel}>{option.label}</Text>
+                      <Text style={styles.tipOptionHelper}>{option.helper}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {tipMode && tipMode !== 'no_tip' && (
+              <View style={styles.tipAmountWrap}>
+                <Text style={styles.tipAmountLabel}>Tip amount</Text>
+                <TextInput
+                  value={tipInput}
+                  onChangeText={(value) => setTipInput(cleanMoneyText(value))}
+                  keyboardType="decimal-pad"
+                  placeholder="0.00"
+                  placeholderTextColor={colors.outline}
+                  style={styles.tipAmountInput}
+                />
+              </View>
+            )}
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={handleConfirmTip}
+              disabled={savingTip}
+              style={[styles.tipConfirmButton, savingTip && styles.headerButtonDisabled]}
+            >
+              {savingTip ? (
+                <ActivityIndicator size="small" color={colors.onSecondary} />
+              ) : (
+                <Text style={styles.tipConfirmButtonText}>Confirm tip</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -687,6 +827,131 @@ const styles = StyleSheet.create({
   editItemsButtonText: {
     fontFamily: 'Inter_700Bold',
     fontSize: 13,
+    fontWeight: '700',
+    color: colors.onSecondary,
+  },
+
+  tipModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  tipModalCard: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: 28,
+    padding: 24,
+    ...shadows.card,
+  },
+  tipModalIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.secondaryContainer,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  tipModalTitle: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 23,
+    fontWeight: '800',
+    color: colors.onSurface,
+    letterSpacing: -0.5,
+  },
+  tipModalSubtitle: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: colors.onSurfaceVariant,
+    lineHeight: 20,
+    marginTop: 6,
+  },
+  tipOptions: {
+    gap: 10,
+    marginTop: 20,
+  },
+  tipOption: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+    borderRadius: 18,
+    backgroundColor: colors.surfaceContainerLowest,
+  },
+  tipOptionSelected: {
+    borderColor: colors.secondary,
+    backgroundColor: colors.surfaceContainerLow,
+  },
+  tipOptionRadio: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: colors.outlineVariant,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  tipOptionRadioSelected: {
+    borderColor: colors.secondary,
+  },
+  tipOptionRadioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.secondary,
+  },
+  tipOptionCopy: {
+    flex: 1,
+  },
+  tipOptionLabel: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  tipOptionHelper: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  tipAmountWrap: {
+    marginTop: 18,
+  },
+  tipAmountLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.onSurfaceVariant,
+    marginBottom: 8,
+  },
+  tipAmountInput: {
+    minHeight: 52,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.onSurface,
+    backgroundColor: colors.surfaceContainerLow,
+  },
+  tipConfirmButton: {
+    minHeight: 54,
+    borderRadius: radii.full,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 22,
+  },
+  tipConfirmButtonText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 16,
     fontWeight: '700',
     color: colors.onSecondary,
   },

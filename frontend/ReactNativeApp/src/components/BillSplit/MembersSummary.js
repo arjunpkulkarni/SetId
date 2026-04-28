@@ -18,13 +18,15 @@ function roundMoney(n) {
 }
 
 export function MembersSummary({ members, serverAssignments, bill }) {
-  const billTotal = parsePriceValue(bill?.total ?? 0);
-
   // Sum amount_owed from backend assignments per member
   const allItemsSubtotal = serverAssignments.reduce(
     (s, a) => s + parsePriceValue(a.amount_owed), 0,
   );
-  const tipAndTax = Math.max(0, billTotal - allItemsSubtotal);
+  const billSubtotal = parsePriceValue(bill?.subtotal ?? allItemsSubtotal);
+  const billTax = parsePriceValue(bill?.tax ?? 0);
+  const billTip = bill?.tip_split_mode === 'proportional'
+    ? parsePriceValue(bill?.tip ?? 0)
+    : 0;
 
   const memberTotals = members.map((m) => {
     const mAssignments = serverAssignments.filter(
@@ -34,9 +36,12 @@ export function MembersSummary({ members, serverAssignments, bill }) {
       (s, a) => s + parsePriceValue(a.amount_owed), 0,
     );
     const itemCount = mAssignments.length;
-    const tipShare = allItemsSubtotal > 0 ? tipAndTax * (subtotal / allItemsSubtotal) : 0;
-    const total = roundMoney(subtotal + tipShare);
-    return { ...m, subtotal: roundMoney(subtotal), tipShare: roundMoney(tipShare), total, itemCount };
+    const proportion = billSubtotal > 0 ? subtotal / billSubtotal : 0;
+    const taxShare = billTax * proportion;
+    const tipShare = billTip * proportion;
+    const overheadShare = taxShare + tipShare;
+    const total = roundMoney(subtotal + overheadShare);
+    return { ...m, subtotal: roundMoney(subtotal), overheadShare: roundMoney(overheadShare), total, itemCount };
   });
 
   return (
@@ -52,7 +57,7 @@ export function MembersSummary({ members, serverAssignments, bill }) {
               <Text style={styles.memberName}>{m.nickname}</Text>
               <Text style={styles.memberItemCount}>
                 {m.itemCount} {m.itemCount === 1 ? 'Item' : 'Items'}
-                {m.tipShare > 0 ? ` · incl. ${formatCurrency(m.tipShare)} tip/tax` : ''}
+                {m.overheadShare > 0 ? ` · incl. ${formatCurrency(m.overheadShare)} tax/tip` : ''}
               </Text>
             </View>
           </View>

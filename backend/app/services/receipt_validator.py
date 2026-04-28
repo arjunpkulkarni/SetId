@@ -93,6 +93,7 @@ def validate_parsed_receipt(
     total,
     llm_confidence,
     rows: list[list[str]] | None,
+    tip=None,
 ) -> dict:
     warnings: list[str] = []
     normalized_items: list[dict] = []
@@ -100,6 +101,7 @@ def validate_parsed_receipt(
 
     subtotal_dec = _to_decimal(subtotal)
     tax_dec = _to_decimal(tax) or Decimal("0.00")
+    tip_dec = _to_decimal(tip) or Decimal("0.00")
     total_dec = _to_decimal(total)
 
     row_lookup = {" ".join(row).strip().lower(): row for row in rows if row}
@@ -161,9 +163,9 @@ def validate_parsed_receipt(
         warnings.append("Mismatch between subtotal and sum of items")
 
     if total_dec is None:
-        total_dec = _quantize(subtotal_dec + tax_dec)
-        warnings.append("Total derived from subtotal and tax")
-    elif abs(_quantize(subtotal_dec + tax_dec) - total_dec) > TOLERANCE:
+        total_dec = _quantize(subtotal_dec + tax_dec + tip_dec)
+        warnings.append("Total derived from subtotal, tax, and tip")
+    elif abs(_quantize(subtotal_dec + tax_dec + tip_dec) - total_dec) > TOLERANCE:
         warnings.append("Mismatch between total and computed sum")
 
     overall_confidence = 0.0
@@ -178,6 +180,7 @@ def validate_parsed_receipt(
         "items": normalized_items,
         "subtotal": subtotal_dec,
         "tax": tax_dec,
+        "tip": tip_dec,
         "total": total_dec,
         "overall_confidence": overall_confidence,
         "warnings": warnings,

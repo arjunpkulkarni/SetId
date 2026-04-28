@@ -269,9 +269,9 @@ class CalculationService:
             bill.service_fee_percentage = percentage
 
         # Calculate and apply the fee
-        # Tip is already included in the receipt total, don't add it again
+        # Bill total tracks the full amount the host paid.
         bill.service_fee = self.calculate_service_fee(bill_id)
-        bill.total = bill.subtotal + bill.tax + bill.service_fee
+        bill.total = bill.subtotal + bill.tax + (bill.tip or Decimal("0")) + bill.service_fee
 
         self.db.commit()
         self.db.refresh(bill)
@@ -318,10 +318,9 @@ class CalculationService:
 
         bill = self.db.query(Bill).filter(Bill.id == bill_id).first()
         if bill:
-            # Recalculate service fee based on current settings
-            # Tip is already included in the receipt total, don't add it again
+            # Recalculate service fee based on current settings.
             bill.service_fee = self.calculate_service_fee(bill_id)
-            bill.total = bill.subtotal + bill.tax + bill.service_fee
+            bill.total = bill.subtotal + bill.tax + (bill.tip or Decimal("0")) + bill.service_fee
 
         self.db.commit()
 
@@ -352,6 +351,7 @@ class CalculationService:
         bill_subtotal = bill.subtotal or Decimal("0")
         bill_tax = bill.tax or Decimal("0")
         bill_tip = bill.tip or Decimal("0")
+        tip_split_mode = bill.tip_split_mode or "proportional"
 
         bill_fee = bill.service_fee or Decimal("0")
         if bill_fee == Decimal("0") and bill_subtotal > 0:
@@ -405,13 +405,15 @@ class CalculationService:
             else:
                 proportion = Decimal("0")
 
-            # Tip is already on the receipt, so distribute it proportionally
             tax_share = (proportion * bill_tax).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
-            tip_share = (proportion * bill_tip).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
+            if tip_split_mode == "proportional":
+                tip_share = (proportion * bill_tip).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+            else:
+                tip_share = Decimal("0.00")
             fee_share = (proportion * bill_fee).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )

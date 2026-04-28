@@ -47,6 +47,19 @@ export const claimItems = async (inviteToken, claims, { clientMutationId } = {})
   return body.data ?? body;
 };
 
+export const evenSplitReceipt = async (inviteToken, { clientMutationId } = {}) => {
+  const res = await fetch(`${API_BASE_URL}/party/${inviteToken}/even-split`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...(clientMutationId ? { client_mutation_id: clientMutationId } : {}),
+    }),
+  });
+  if (!res.ok) throw await buildError(res, 'Failed to split receipt evenly');
+  const body = await res.json();
+  return body.data ?? body;
+};
+
 export const confirmParty = async (inviteToken) => {
   const res = await fetch(`${API_BASE_URL}/party/${inviteToken}/confirm`, {
     method: 'POST',

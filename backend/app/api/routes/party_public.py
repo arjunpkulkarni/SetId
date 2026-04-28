@@ -44,6 +44,10 @@ class ClaimRequest(BaseModel):
     client_mutation_id: str | None = None
 
 
+class EvenSplitRequest(BaseModel):
+    client_mutation_id: str | None = None
+
+
 # ── Helpers ──────────────────────────────────────────────────────
 
 def _get_member_by_token(db: Session, token: str) -> BillMember | None:
@@ -99,6 +103,7 @@ def _build_receipt_response(db: Session, bill: Bill, members: list[BillMember]) 
             "subtotal": str(bill.subtotal or 0),
             "tax": str(bill.tax or 0),
             "tip": str(bill.tip or 0),
+            "tip_split_mode": bill.tip_split_mode or "proportional",
             "total": str(bill.total or 0),
         },
         "members": [
@@ -370,6 +375,48 @@ def get_receipt(token: str, db: Session = Depends(get_db)):
         .all()
     )
     return success_response(data=_build_receipt_response(db, bill, members))
+
+
+@router.post("/{token}/even-split")
+def even_split_receipt(
+    token: str,
+    body: EvenSplitRequest,
+    db: Session = Depends(get_db),
+):
+    member = _get_member_by_token(db, token)
+    if not member:
+        return error_response("NOT_FOUND", "Invalid or expired invite link.", 404)
+
+    if member.status != "joined":
+        return error_response("BAD_REQUEST", "You must join the bill first.", 400)
+
+    bill = member.bill
+    if not bill:
+        return error_response("NOT_FOUND", "Bill not found.", 404)
+
+    bill_id_str = str(bill.id)
+    CalculationService(db).auto_split(bill_id_str)
+
+    payload: dict = {
+        "action": "full_sync",
+        "assignments": _load_assignments_payload(bill_id_str),
+    }
+    if body.client_mutation_id is not None:
+        payload["client_mutation_id"] = body.client_mutation_id
+    _broadcast_delta_now(bill_id_str, payload)
+
+    members = (
+        db.query(BillMember)
+        .filter(
+            BillMember.bill_id == bill.id,
+            BillMember.status != "invite_link",
+        )
+        .all()
+    )
+    return success_response(
+        data=_build_receipt_response(db, bill, members),
+        message="Receipt split evenly",
+    )
 
 
 @router.post("/{token}/claim")

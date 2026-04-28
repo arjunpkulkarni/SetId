@@ -182,7 +182,11 @@ export default function ReviewPaymentScreen({ navigation, route }) {
       const allItemsSubtotal = allAssignments.reduce(
         (s, a) => s + parseFloat(a.amount_owed ?? 0), 0,
       );
-      const tipAndTax = Math.max(0, totalBill - allItemsSubtotal);
+      const billSubtotal = parseFloat(b?.subtotal ?? allItemsSubtotal);
+      const billTax = parseFloat(b?.tax ?? 0);
+      const billTip = b?.tip_split_mode === 'proportional'
+        ? parseFloat(b?.tip ?? 0)
+        : 0;
 
       const allMemberData = mems.map((m) => {
         const mAssignments = allAssignments.filter(
@@ -192,10 +196,10 @@ export default function ReviewPaymentScreen({ navigation, route }) {
           (s, a) => s + parseFloat(a.amount_owed ?? 0),
           0,
         );
-        const tipShare = allItemsSubtotal > 0
-          ? tipAndTax * (itemSubtotal / allItemsSubtotal)
-          : 0;
-        const amountOwed = Math.round((itemSubtotal + tipShare) * 100) / 100;
+        const proportion = billSubtotal > 0 ? itemSubtotal / billSubtotal : 0;
+        const taxShare = billTax * proportion;
+        const tipShare = billTip * proportion;
+        const amountOwed = Math.round((itemSubtotal + taxShare + tipShare) * 100) / 100;
 
         const mPayments = allPayments.filter(
           (p) => String(p.bill_member_id) === String(m.id) && p.status === 'succeeded',
@@ -227,10 +231,10 @@ export default function ReviewPaymentScreen({ navigation, route }) {
         };
       });
 
-      const hostMember = allMemberData.find((m) => m.isHost);
-      setHostShare(hostMember?.amountOwed ?? 0);
-
-      setParticipants(allMemberData.filter((m) => !m.isHost));
+      const nonHostMembers = allMemberData.filter((m) => !m.isHost);
+      const amountToCollect = nonHostMembers.reduce((sum, m) => sum + (m.amountOwed || 0), 0);
+      setHostShare(Math.max(0, totalBill - amountToCollect));
+      setParticipants(nonHostMembers);
     } catch (err) {
       console.error('[PaymentTracking] load error:', err);
       if (!isBackgroundRefresh) {
@@ -290,8 +294,8 @@ export default function ReviewPaymentScreen({ navigation, route }) {
   }, [wsConnected, load]);
 
   const totalBill = parseFloat(bill?.total ?? 0);
-  // The host paid upfront — the amount to collect is the bill minus the host's share
-  const amountToCollect = Math.max(0, totalBill - hostShare);
+  // The host paid upfront — collect only what non-host members owe.
+  const amountToCollect = participants.reduce((s, p) => s + (p.amountOwed || 0), 0);
   const totalCollected = participants.reduce((s, p) => s + (p.amountPaid || 0), 0);
   const totalRemaining = Math.max(0, amountToCollect - totalCollected);
   const percent = amountToCollect > 0 ? Math.round((totalCollected / amountToCollect) * 100) : 0;
@@ -390,9 +394,9 @@ export default function ReviewPaymentScreen({ navigation, route }) {
           <View style={styles.hostShareCard}>
             <MaterialIcons name="account-balance-wallet" size={18} color={colors.secondary} />
             <View style={styles.hostShareInfo}>
-              <Text style={styles.hostShareLabel}>Your share (paid upfront)</Text>
+              <Text style={styles.hostShareLabel}>Covered by host</Text>
               <Text style={styles.hostShareSub}>
-                {formatMoney(totalBill)} total − {formatMoney(hostShare)} yours = {formatMoney(amountToCollect)} to collect
+                {formatMoney(totalBill)} total − {formatMoney(hostShare)} not collected = {formatMoney(amountToCollect)} to collect
               </Text>
             </View>
           </View>

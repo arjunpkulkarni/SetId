@@ -1,5 +1,6 @@
 import secrets
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -96,6 +97,15 @@ class BillService:
         for key, value in data.items():
             if hasattr(bill, key):
                 setattr(bill, key, value)
+
+        financial_fields = {"subtotal", "tax", "tip", "service_fee"}
+        if financial_fields.intersection(data) and "total" not in data:
+            bill.total = (
+                (bill.subtotal or Decimal("0.00"))
+                + (bill.tax or Decimal("0.00"))
+                + (bill.tip or Decimal("0.00"))
+                + (bill.service_fee or Decimal("0.00"))
+            )
 
         self.db.commit()
         self.db.refresh(bill)

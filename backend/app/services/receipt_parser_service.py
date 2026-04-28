@@ -130,14 +130,14 @@ explanations.
 
 An "item" is a purchased product or dish. The `items` array must contain ONLY
 purchased items. If a line is any of the following, it is NOT an item — it either
-maps to a dedicated top-level field (`subtotal` / `tax` / `total`) or is dropped
+maps to a dedicated top-level field (`subtotal` / `tax` / `tip` / `total`) or is dropped
 entirely:
 
   - subtotal, sub-total, sub total, subttl, subtoal, running subtotal, complete subtotal
   - total, grand total, net total, running total, total due
   - balance due, amount due, amount owed, amt due, pay this amount, to pay, please pay, charge
   - tax, sales tax, vat, gst, hst
-  - tip, gratuity, service charge, service fee
+  - tip, gratuity, service charge, service fee (map explicit customer-paid tip/gratuity to `tip`)
   - change, change due, cash, credit, debit, card, visa, mastercard, amex, discover
   - approval, auth, batch, trace, merchant id, terminal id
   - addresses, phone numbers, dates, timestamps, "thank you" messages, loyalty codes
@@ -159,14 +159,16 @@ Example input (tab-separated OCR rows):
   COMPLETE SUBTOTAL\t26.99
   SUBTOTAL\t26.99
   TAX\t3.17
-  BALANCE DUE\t30.16
+  TIP\t5.00
+  BALANCE DUE\t35.16
 
 Correct output:
   {
     "merchant_name": null,
     "subtotal": 26.99,
     "tax": 3.17,
-    "total": 30.16,
+    "tip": 5.00,
+    "total": 35.16,
     "items": [
       {"name": "12 OZ STRIP", "quantity": 1, "unit_price": 26.99, "total_price": 26.99, "modifiers": []}
     ],
@@ -197,6 +199,9 @@ CLEANUP_RESPONSE_FORMAT = {
                     "type": ["number", "null"],
                 },
                 "tax": {
+                    "type": ["number", "null"],
+                },
+                "tip": {
                     "type": ["number", "null"],
                 },
                 "total": {
@@ -319,6 +324,7 @@ class CleanupReceiptPayload(BaseModel):
     merchant_name: str | None = None
     subtotal: Decimal | None = None
     tax: Decimal | None = None
+    tip: Decimal | None = None
     total: Decimal | None = None
     items: list[CleanupReceiptItem] = Field(default_factory=list)
     confidence: Decimal = Decimal("0.0")
@@ -329,7 +335,7 @@ class CleanupReceiptPayload(BaseModel):
         cleaned = " ".join(str(value or "").split()).strip()
         return cleaned or None
 
-    @field_validator("subtotal", "tax", "total", mode="before")
+    @field_validator("subtotal", "tax", "tip", "total", mode="before")
     @classmethod
     def validate_optional_money(cls, value: object) -> Decimal | None:
         return _coerce_decimal(value)
@@ -637,6 +643,7 @@ class ReceiptParserService:
                         if cleaned_i.subtotal is not None
                         else None,
                         "tax": float(cleaned_i.tax) if cleaned_i.tax is not None else None,
+                        "tip": float(cleaned_i.tip) if cleaned_i.tip is not None else None,
                         "total": float(cleaned_i.total)
                         if cleaned_i.total is not None
                         else None,
@@ -836,6 +843,8 @@ class ReceiptParserService:
         if bill:
             bill.subtotal = Decimal("0.00")
             bill.tax = Decimal("0.00")
+            bill.tip = Decimal("0.00")
+            bill.tip_split_mode = "proportional"
             bill.total = Decimal("0.00")
             bill.merchant_name = None
 
@@ -995,6 +1004,7 @@ class ReceiptParserService:
                 "merchant_name": None,
                 "subtotal": preparsed.get("totals", {}).get("subtotal"),
                 "tax": preparsed.get("totals", {}).get("tax"),
+                "tip": preparsed.get("totals", {}).get("tip"),
                 "total": preparsed.get("totals", {}).get("total"),
                 "items": [
                     {
@@ -1078,6 +1088,7 @@ class ReceiptParserService:
             subtotal=cleaned.subtotal,
             tax=cleaned.tax,
             total=cleaned.total,
+            tip=cleaned.tip,
             llm_confidence=cleaned.confidence,
             rows=rows,
         )
@@ -1143,12 +1154,18 @@ class ReceiptParserService:
         if cleaned.tax is None:
             warnings.append("Tax was not detected; defaulted to 0.")
 
+        tip = validated["tip"]
+        if cleaned.tip is None:
+            warnings.append("Tip was not detected; defaulted to 0.")
+
         total = validated["total"]
 
         bill = self.db.query(Bill).filter(Bill.id == bill_id).first()
         if bill:
             bill.subtotal = subtotal
             bill.tax = tax
+            bill.tip = tip
+            bill.tip_split_mode = "proportional"
             bill.total = total
             if cleaned.merchant_name:
                 bill.merchant_name = cleaned.merchant_name
@@ -1167,6 +1184,7 @@ class ReceiptParserService:
             subtotal=subtotal,
             items=parsed_items,
             tax=tax,
+            tip=tip,
             total=total,
             pipeline_version=RECEIPT_PIPELINE_VERSION,
             overall_confidence=validated["overall_confidence"],
@@ -1199,6 +1217,7 @@ class ReceiptParserService:
                 for item in items
             ],
             tax=bill.tax,
+            tip=bill.tip or Decimal("0.00"),
             total=bill.total,
             pipeline_version=receipt.parsed_version if receipt else None,
             overall_confidence=receipt.overall_confidence if receipt else None,
@@ -1331,10 +1350,10 @@ class ReceiptParserService:
             Decimal("0.00"),
         ).quantize(MONEY_QUANTIZE)
         bill.subtotal = subtotal
-        # Tip is already on the receipt, don't add it again
         bill.total = (
             subtotal
             + (bill.tax or Decimal("0.00"))
+            + (bill.tip or Decimal("0.00"))
             + (bill.service_fee or Decimal("0.00"))
         ).quantize(MONEY_QUANTIZE)
 
