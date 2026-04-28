@@ -330,9 +330,22 @@ def auto_split(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.api.deps_bill import require_bill_participant
+
+    try:
+        require_bill_participant(db, str(bill_id), str(current_user.id))
+    except ValueError as e:
+        code = str(e)
+        if code == "NOT_FOUND":
+            return error_response("NOT_FOUND", "Bill not found", 404)
+        return error_response("FORBIDDEN", "Not authorized", 403)
+
     svc = CalculationService(db)
     member_ids = [str(mid) for mid in body.member_ids] if body.member_ids else None
-    assignments = svc.auto_split(str(bill_id), member_ids)
+    try:
+        assignments = svc.auto_split(str(bill_id), member_ids)
+    except ValueError as e:
+        return error_response("BAD_REQUEST", str(e), 400)
 
     # Refresh relationships for serialization
     for a in assignments:

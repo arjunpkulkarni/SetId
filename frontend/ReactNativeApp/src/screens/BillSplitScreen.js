@@ -17,13 +17,14 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, shadows } from '../theme';
 import {
+  assignments as assignmentsApi,
   bills as billsApi,
   receipts as receiptsApi,
   members as membersApi,
   stripeConnect,
 } from '../services/api';
 import useBillWebSocket from '../hooks/useBillWebSocket';
-import { useBillData } from '../hooks/useBillData';
+import { newClientMutationId, useBillData } from '../hooks/useBillData';
 import {
   TopAppBar,
   MerchantHeader,
@@ -59,6 +60,10 @@ function cleanMoneyText(value) {
   const [whole, ...rest] = cleaned.split('.');
   const decimals = rest.join('').slice(0, 2);
   return rest.length > 0 ? `${whole}.${decimals}` : whole;
+}
+
+function normalizeTipMode(value) {
+  return value === 'no_tip' ? 'no_tip' : 'proportional';
 }
 
 function formatDate(dateStr) {
@@ -120,6 +125,7 @@ export default function BillSplitScreen({ navigation, route }) {
   } = useBillData(billId);
 
   const [saving, setSaving] = useState(false);
+  const [autoSplitting, setAutoSplitting] = useState(false);
   const [showTipConfirm, setShowTipConfirm] = useState(false);
   const [tipMode, setTipMode] = useState(null);
   const [tipInput, setTipInput] = useState('');
@@ -131,7 +137,7 @@ export default function BillSplitScreen({ navigation, route }) {
 
     const detectedTip = parsePriceValue(bill.tip);
     setTipInput(detectedTip > 0 ? detectedTip.toFixed(2) : '');
-    setTipMode(detectedTip > 0 ? (bill.tip_split_mode || 'proportional') : null);
+    setTipMode(detectedTip > 0 ? normalizeTipMode(bill.tip_split_mode) : null);
     setShowTipConfirm(true);
     tipPromptShownRef.current = true;
     navigation.setParams?.({ showTipConfirmation: false });
@@ -475,6 +481,44 @@ export default function BillSplitScreen({ navigation, route }) {
     }
   }, [billId, fetchSummary, tipInput, tipMode]);
 
+  const handleEvenSplit = useCallback(() => {
+    if (isEditingItems || savingItemEdits) {
+      Alert.alert('Save items first', 'Tap Done to save receipt edits before splitting evenly.');
+      return;
+    }
+
+    if (members.length === 0 || visibleItems.length === 0) {
+      Alert.alert('Nothing to split', 'Add receipt items and members before using even split.');
+      return;
+    }
+
+    Alert.alert(
+      'Even split receipt?',
+      'This will replace current item assignments and split every receipt item evenly across all members.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Even Split',
+          onPress: async () => {
+            setAutoSplitting(true);
+            try {
+              await assignmentsApi.autoSplit(
+                billId,
+                members.map((m) => m.id),
+                { clientMutationId: newClientMutationId() },
+              );
+              await fetchSummary(true);
+            } catch (err) {
+              Alert.alert('Could not split evenly', err?.message ?? err?.error?.message ?? 'Please try again.');
+            } finally {
+              setAutoSplitting(false);
+            }
+          },
+        },
+      ],
+    );
+  }, [billId, fetchSummary, isEditingItems, members, savingItemEdits, visibleItems]);
+
   const handleSend = async () => {
     if (isEditingItems || savingItemEdits) {
       Alert.alert('Save items first', 'Tap Done to save your receipt edits before sending to members.');
@@ -549,12 +593,10 @@ export default function BillSplitScreen({ navigation, route }) {
   const tipOptions = detectedTip > 0
     ? [
         { mode: 'proportional', label: 'Split proportionally', helper: 'Guests share tip based on their item subtotal.' },
-        { mode: 'host_covered', label: 'Host covered tip', helper: 'Keep the paid tip on the bill, but do not charge guests for it.' },
         { mode: 'no_tip', label: 'No tip', helper: 'Set tip to $0.00.' },
       ]
     : [
         { mode: 'proportional', label: 'Add tip and split proportionally', helper: 'Guests share tip based on their item subtotal.' },
-        { mode: 'host_covered', label: 'Host covered tip', helper: 'Record the tip without charging guests for it.' },
         { mode: 'no_tip', label: 'No tip', helper: 'No tip was paid.' },
       ];
 
@@ -596,6 +638,27 @@ export default function BillSplitScreen({ navigation, route }) {
               <View style={styles.assignHeader}>
                 <Text style={styles.assignTitle}>Assign Items</Text>
                 <View style={styles.assignActions}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handleEvenSplit}
+                    disabled={autoSplitting || isEditingItems || savingItemEdits}
+                  >
+                    <View
+                      style={[
+                        styles.evenSplitButton,
+                        (autoSplitting || isEditingItems || savingItemEdits) && styles.headerButtonDisabled,
+                      ]}
+                    >
+                      {autoSplitting ? (
+                        <ActivityIndicator size="small" color={colors.secondary} />
+                      ) : (
+                        <>
+                          <MaterialIcons name="call-split" size={16} color={colors.secondary} />
+                          <Text style={styles.evenSplitButtonText}>Even Split</Text>
+                        </>
+                      )}
+                    </View>
+                  </TouchableOpacity>
                   {isEditingItems && (
                     <TouchableOpacity
                       activeOpacity={0.85}
@@ -813,6 +876,24 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  evenSplitButton: {
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: radii.full,
+    borderWidth: 1,
+    borderColor: colors.secondary,
+    backgroundColor: colors.surfaceContainerLowest,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  evenSplitButtonText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.secondary,
   },
   headerButtonDisabled: {
     opacity: 0.7,

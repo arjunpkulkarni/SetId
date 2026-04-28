@@ -20,7 +20,7 @@ class BillUpdate(BaseModel):
     subtotal: Decimal | None = None
     tax: Decimal | None = None
     tip: Decimal | None = None
-    tip_split_mode: Literal["proportional", "host_covered", "no_tip"] | None = None
+    tip_split_mode: Literal["proportional", "no_tip"] | None = None
     service_fee: Decimal | None = None
     total: Decimal | None = None
     notes: str | None = None
