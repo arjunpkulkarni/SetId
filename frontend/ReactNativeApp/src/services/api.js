@@ -64,9 +64,13 @@ function logAxiosFailure(error) {
 //   - RTK Query (in `src/store/api.js`) for dashboard + cross-screen caches
 //   - AsyncStorage via `offlineStorage` for durable offline fallback (below)
 
+const DEFAULT_HTTP_TIMEOUT_MS = 20_000;
+/** Sync receipt parse hits vision OCR (+ optional LLM); default 20s aborts too early. */
+const RECEIPT_LONG_TIMEOUT_MS = 120_000;
+
 const client = axios.create({
   baseURL: BASE_URL,
-  timeout: 20_000,
+  timeout: DEFAULT_HTTP_TIMEOUT_MS,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -250,18 +254,24 @@ export const receipts = {
     return client.post(`/bills/${billId}/receipt/upload`, form, {
       params: { append },
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: RECEIPT_LONG_TIMEOUT_MS,
     });
   },
 
   get: (billId) => client.get(`/bills/${billId}/receipt`),
 
   parse: (billId) =>
-    client.post(`/bills/${billId}/receipt/parse`, null, { params: { sync: true } }),
+    client.post(`/bills/${billId}/receipt/parse`, null, {
+      params: { sync: true },
+      timeout: RECEIPT_LONG_TIMEOUT_MS,
+    }),
 
   listItems: (billId) => client.get(`/bills/${billId}/receipt/items`),
 
   syncItems: (billId, payload) =>
-    client.post(`/bills/${billId}/receipt/items/sync`, payload),
+    client.post(`/bills/${billId}/receipt/items/sync`, payload, {
+      timeout: RECEIPT_LONG_TIMEOUT_MS,
+    }),
 
   updateItem: (billId, itemId, fields) =>
     client.patch(`/bills/${billId}/receipt/items/${itemId}`, fields),
