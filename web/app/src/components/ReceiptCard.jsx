@@ -24,7 +24,13 @@ export default function ReceiptCard({ paymentInfo }) {
               <div className="line-item-desc">Assigned to you</div>
             </div>
             <span className="line-item-price">
-              {formatCurrency(parseFloat(item.total_price || item.unit_price || item.amount || item.price || 0))}
+              {formatCurrency(
+                parseFloat(
+                  item.assigned_amount != null && item.assigned_amount !== ''
+                    ? item.assigned_amount
+                    : item.total_price || item.unit_price || item.amount || item.price || 0,
+                ) || 0,
+              )}
             </span>
           </div>
         ))

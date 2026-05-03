@@ -587,12 +587,35 @@ def confirm_and_pay(token: str, db: Session = Depends(get_db)):
     except ValueError as e:
         return error_response("PAYMENT_ERROR", str(e), 400)
 
+    # Line items for this guest (same shape as GET /pay/{token}) so web ReceiptCard
+    # can list shares; breakdown subtotal already reflects these assignments.
+    assignments = (
+        db.query(ItemAssignment)
+        .join(ReceiptItem, ItemAssignment.receipt_item_id == ReceiptItem.id)
+        .filter(ItemAssignment.bill_member_id == member.id)
+        .all()
+    )
+    items_out = []
+    for assignment in assignments:
+        item = assignment.item
+        if not item:
+            continue
+        items_out.append({
+            "name": item.name,
+            "quantity": item.quantity,
+            "unit_price": str(item.unit_price),
+            "total_price": str(item.total_price),
+            "assigned_amount": str(assignment.amount_owed),
+            "share_type": assignment.share_type,
+        })
+
     return success_response(data={
         "payment_id": str(payment.id),
         "amount": str(payment.amount),
         "currency": payment.currency,
         "stripe_client_secret": payment.stripe_client_secret,
         "stripe_publishable_key": settings.STRIPE_PUBLISHABLE_KEY,
+        "items": items_out,
         "breakdown": {
             "subtotal": str(member_breakdown["subtotal"]),
             "tax_share": str(member_breakdown["tax_share"]),

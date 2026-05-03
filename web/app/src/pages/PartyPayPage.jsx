@@ -87,6 +87,7 @@ export default function PartyPayPage() {
     tip_share: breakdown.tip_share,
     fee_share: breakdown.fee_share,
     total: totalAmount,
+    items: paymentInfo.items || [],
   };
 
   return (
