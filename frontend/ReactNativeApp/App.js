@@ -39,6 +39,8 @@ import ScanReceiptScreen from './src/screens/ScanReceiptScreen';
 
 // Lazy load non-critical screens to improve initial startup
 const BillSplitScreen = React.lazy(() => import('./src/screens/BillSplitScreen'));
+const ReceiptSetupTipScreen = React.lazy(() => import('./src/screens/ReceiptSetupTipScreen'));
+const ReceiptSetupPartyScreen = React.lazy(() => import('./src/screens/ReceiptSetupPartyScreen'));
 const ReviewPaymentScreen = React.lazy(() => import('./src/screens/ReviewPaymentScreen'));
 const ActivityDetailScreen = React.lazy(() => import('./src/screens/ActivityDetailScreen'));
 const FundsCollectedScreen = React.lazy(() => import('./src/screens/FundsCollectedScreen'));
@@ -54,6 +56,12 @@ const UpdatePayoutCardScreen = React.lazy(() =>
 // MainNavigator render and trigger React Navigation warnings + unnecessary remounts.
 function BillSplitStackScreen(props) {
   return <LazyScreen component={BillSplitScreen} {...props} />;
+}
+function ReceiptSetupTipStackScreen(props) {
+  return <LazyScreen component={ReceiptSetupTipScreen} {...props} />;
+}
+function ReceiptSetupPartyStackScreen(props) {
+  return <LazyScreen component={ReceiptSetupPartyScreen} {...props} />;
 }
 function ReviewPaymentStackScreen(props) {
   return <LazyScreen component={ReviewPaymentScreen} {...props} />;
@@ -122,6 +130,16 @@ function MainNavigator() {
       <MainStack.Screen
         name="BillSplit"
         component={BillSplitStackScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <MainStack.Screen
+        name="ReceiptSetupTip"
+        component={ReceiptSetupTipStackScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <MainStack.Screen
+        name="ReceiptSetupParty"
+        component={ReceiptSetupPartyStackScreen}
         options={{ animation: 'slide_from_right' }}
       />
       <MainStack.Screen

@@ -169,7 +169,7 @@ def _remaining_for(
 def _build_overview(user_id: str, agg: _DashboardAggregates) -> DashboardOverview:
     total_bills = len(agg.bills)
     active_bills_count = sum(
-        1 for b in agg.bills if b.status in ("draft", "active")
+        1 for b in agg.bills if b.status in ("draft", "active", "ready_to_pay")
     )
     settled_bills_count = sum(1 for b in agg.bills if b.status == "settled")
 
@@ -203,7 +203,7 @@ def _build_active_bill_summaries(
 ) -> list[dict]:
     summaries: list[dict] = []
     for bill in agg.bills:
-        if bill.status not in ("draft", "active"):
+        if bill.status not in ("draft", "active", "ready_to_pay"):
             continue
 
         members = agg.members_by_bill.get(bill.id, [])
@@ -232,6 +232,57 @@ def _build_active_bill_summaries(
                 member_count=len(members),
                 status=bill.status,
                 created_at=bill.created_at,
+                updated_at=bill.updated_at,
+            ).model_dump()
+        )
+
+    return summaries
+
+
+def _build_past_bill_summaries(
+    user_id: str,
+    agg: _DashboardAggregates,
+    *,
+    limit: int = 20,
+) -> list[dict]:
+    """Bills that are no longer draft/active (e.g. settled), newest first."""
+    active_statuses = ("draft", "active", "ready_to_pay")
+    past_bills = [b for b in agg.bills if b.status not in active_statuses]
+    past_bills.sort(
+        key=lambda b: (b.updated_at or b.created_at),
+        reverse=True,
+    )
+    past_bills = past_bills[:limit]
+
+    summaries: list[dict] = []
+    for bill in past_bills:
+        members = agg.members_by_bill.get(bill.id, [])
+        user_member = next((m for m in members if str(m.user_id) == user_id), None)
+
+        if user_member is not None:
+            your_share = agg.owed_by_member.get(user_member.id, _ZERO)
+            paid = agg.paid_by_member.get(user_member.id, _ZERO)
+            remaining = your_share - paid
+            if remaining < 0:
+                remaining = _ZERO
+        else:
+            your_share = _ZERO
+            paid = _ZERO
+            remaining = _ZERO
+
+        summaries.append(
+            ActiveBillSummary(
+                id=bill.id,
+                title=bill.title,
+                merchant_name=bill.merchant_name,
+                total=bill.total or _ZERO,
+                your_share=your_share,
+                paid=paid,
+                remaining=remaining,
+                member_count=len(members),
+                status=bill.status,
+                created_at=bill.created_at,
+                updated_at=bill.updated_at,
             ).model_dump()
         )
 
@@ -248,17 +299,20 @@ def get_dashboard(
 ):
     """Single-round-trip payload powering the dashboard screen.
 
-    Returns both the balance overview and the active bill list so the
-    client only needs one HTTP request on cold open.
+    Returns the balance overview, active bill list, and recent past bills
+    (non-draft / non-active, e.g. settled) so the client only needs one HTTP
+    request on cold open.
     """
     user_id = str(current_user.id)
     agg = _load_dashboard_aggregates(db, user_id)
     overview = _build_overview(user_id, agg)
     active_bills = _build_active_bill_summaries(user_id, agg)
+    past_bills = _build_past_bill_summaries(user_id, agg)
     return success_response(
         data={
             "overview": overview.model_dump(),
             "active_bills": active_bills,
+            "past_bills": past_bills,
         }
     )
 

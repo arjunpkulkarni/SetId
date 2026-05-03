@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class BillCreate(BaseModel):
@@ -19,12 +19,22 @@ class BillUpdate(BaseModel):
     currency: str | None = None
     subtotal: Decimal | None = None
     tax: Decimal | None = None
+    expected_party_size: int | None = None
     tip: Decimal | None = None
     tip_split_mode: Literal["proportional", "no_tip"] | None = None
     service_fee: Decimal | None = None
     total: Decimal | None = None
     notes: str | None = None
     status: str | None = None
+
+    @field_validator("expected_party_size")
+    @classmethod
+    def validate_expected_party_size(cls, v: int | None) -> int | None:
+        if v is None:
+            return v
+        if v < 2 or v > 999:
+            raise ValueError("expected_party_size must be between 2 and 999")
+        return v
 
 
 class BillOut(BaseModel):
@@ -36,6 +46,7 @@ class BillOut(BaseModel):
     owner_id: uuid.UUID
     subtotal: Decimal
     tax: Decimal
+    expected_party_size: int | None = None
     tip: Decimal
     tip_split_mode: str = "proportional"
     service_fee: Decimal

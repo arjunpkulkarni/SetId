@@ -152,6 +152,15 @@ class Settings(BaseSettings):
     # Optional LLM pass for item-name normalization (dictionary always runs first).
     RECEIPT_NORMALIZE_USE_LLM: bool = False
 
+    # Max OCR/cleanup pipelines to run in parallel for multi-page receipts (HTTP-bound).
+    # Set to 1 to restore sequential behavior (e.g. strict provider rate limits).
+    RECEIPT_PARSE_MAX_PARALLEL_IMAGES: int = 3
+
+    # If > 0, raster receipt images are downscaled so the longest edge is at most this
+    # many pixels before the vision API (smaller payloads, faster responses). 0 = disabled.
+    RECEIPT_VISION_MAX_LONG_EDGE: int = 1920
+    RECEIPT_VISION_JPEG_QUALITY: int = 87
+
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",

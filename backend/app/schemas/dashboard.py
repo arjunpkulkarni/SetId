@@ -24,6 +24,7 @@ class ActiveBillSummary(BaseModel):
     member_count: int
     status: str
     created_at: datetime
+    updated_at: datetime | None = None
 
 
 class RecentActivity(BaseModel):

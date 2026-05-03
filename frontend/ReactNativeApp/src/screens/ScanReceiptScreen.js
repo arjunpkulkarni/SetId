@@ -4,11 +4,11 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Dimensions,
   Animated,
   ActivityIndicator,
   Alert,
   Image,
+  useWindowDimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -43,10 +43,6 @@ async function downscaleReceiptImage(uri) {
   }
 }
 
-const { width: SW } = Dimensions.get('window');
-const RETICLE_W = SW - 96;
-const RETICLE_H = RETICLE_W * 1.15;
-
 // Zoom preset values. `value` is what we pass to CameraView's `zoom`
 // prop (0..1). These match roughly-familiar "nX" optical labels on
 // an iPhone. The maximum digital zoom on expo-camera gets noisy fast
@@ -57,14 +53,14 @@ const ZOOM_PRESETS = [
   { label: '3x', value: 0.2 },
 ];
 
-function ScanLine() {
+function ScanLine({ reticleHeight }) {
   const translateY = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(translateY, {
-          toValue: RETICLE_H - 4,
+          toValue: reticleHeight - 4,
           duration: 2200,
           useNativeDriver: true,
         }),
@@ -77,7 +73,7 @@ function ScanLine() {
     );
     loop.start();
     return () => loop.stop();
-  }, [translateY]);
+  }, [translateY, reticleHeight]);
 
   return (
     <Animated.View style={[styles.scanLine, { transform: [{ translateY }] }]}>
@@ -102,6 +98,10 @@ function CornerBracket({ position }) {
 }
 
 export default function ScanReceiptScreen({ navigation, route }) {
+  const { width: windowW } = useWindowDimensions();
+  const reticleW = windowW - 96;
+  const reticleH = reticleW * 1.15;
+
   const insets = useSafeAreaInsets();
   const billId = route?.params?.billId;
   const cameraRef = useRef(null);
@@ -266,11 +266,7 @@ export default function ScanReceiptScreen({ navigation, route }) {
       setParsing(false);
 
       setTimeout(() => {
-        navigation.navigate('BillSplit', {
-          billId,
-          refresh: Date.now(),
-          showTipConfirmation: true,
-        });
+        navigation.replace('ReceiptSetupTip', { billId });
       }, 800);
     } catch (err) {
       setUploading(false);
@@ -450,12 +446,12 @@ export default function ScanReceiptScreen({ navigation, route }) {
           — there's nothing to "scan" anymore, the pixels are locked in.
           The corner brackets stay as a subtle frame. */}
       <View style={styles.reticleContainer}>
-        <View style={styles.reticle}>
+        <View style={[styles.reticle, { width: reticleW, height: reticleH }]}>
           <CornerBracket position="topLeft" />
           <CornerBracket position="topRight" />
           <CornerBracket position="bottomLeft" />
           <CornerBracket position="bottomRight" />
-          {!parsedData && !frozen && !capturing && <ScanLine />}
+          {!parsedData && !frozen && !capturing && <ScanLine reticleHeight={reticleH} />}
           {capturing && (
             <View style={styles.holdSteadyBadge} pointerEvents="none">
               <ActivityIndicator color={colors.onSecondaryContainer} size="small" />
@@ -709,8 +705,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 48,
   },
   reticle: {
-    width: RETICLE_W,
-    height: RETICLE_H,
     borderRadius: radii.xl,
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.15)',

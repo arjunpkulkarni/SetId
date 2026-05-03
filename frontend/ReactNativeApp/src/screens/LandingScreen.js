@@ -7,14 +7,13 @@ import {
   TouchableOpacity,
   Animated,
   PanResponder,
-  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 
-const { width: SW, height: SH } = Dimensions.get('window');
 const BRAND      = '#105D4B';
 const BRAND_DARK = '#0d4a3c';
 const MINT_1     = '#4FD1A7';
@@ -22,7 +21,6 @@ const MINT_2     = '#1FA87A';
 const MINT_TINT  = '#E6F4F0';
 const MINT_TINT_2 = '#F0F9F6';
 const CTA_GRAD   = ['#4FD1A7', '#1FA87A'];
-const ILLUS_H    = Math.min(280, SH * 0.38);
 
 // 4 slides: 0=Intro, 1=Assign, 2=Scan, 3=Settle
 const NUM_SLIDES = 4;
@@ -96,7 +94,7 @@ function DollarChip({ left, top, size = 30, delay }) {
 // ─────────────────────────────────────────────────────────────
 // Slide 0 – Intro (green)
 // ─────────────────────────────────────────────────────────────
-function IntroSlide({ active, onGetStarted, topInset }) {
+function IntroSlide({ active, onGetStarted, topInset, windowWidth }) {
   const eyebrow = useRef(new Animated.Value(0)).current;
   const heading = useRef(new Animated.Value(0)).current;
   const body    = useRef(new Animated.Value(0)).current;
@@ -141,7 +139,7 @@ function IntroSlide({ active, onGetStarted, topInset }) {
       <FloatingReceipt left={70}  top={topInset + 260} rotation={8}   delay={320} width={50} height={70} />
 
       {/* Dollar chips */}
-      <DollarChip left={SW * 0.72} top={topInset + 170} size={30} delay={240} />
+      <DollarChip left={windowWidth * 0.72} top={topInset + 170} size={30} delay={240} />
       <DollarChip left={50}        top={topInset + 370} size={26} delay={360} />
 
       {/* Logo row at top */}
@@ -205,7 +203,7 @@ const ASSIGN_ITEMS = [
   { name: 'House Wine ×2',  price: 32, assign: 'ALL', revealStep: 3 },
 ];
 
-function AssignSlide({ active }) {
+function AssignSlide({ active, illusHeight }) {
   const [step, setStep] = useState(0);
   const chipScales = useRef(ASSIGN_ITEMS.map(() => new Animated.Value(0))).current;
 
@@ -258,7 +256,7 @@ function AssignSlide({ active }) {
 
   return (
     <View style={styles.slideContent}>
-      <View style={[styles.illustrationBox, { height: ILLUS_H }]}>
+      <View style={[styles.illustrationBox, { height: illusHeight }]}>
         <LinearGradient colors={['#FFFFFF', MINT_TINT]} start={{ x: 0.5, y: 1 }} end={{ x: 0.5, y: 0 }} style={StyleSheet.absoluteFill} />
         <View style={styles.avatarRow}>
           {PEOPLE.map(p => {
@@ -334,7 +332,7 @@ const RECEIPT_ITEMS = [
 const REVEAL_FRACS = [0.15, 0.28, 0.42, 0.55, 0.68, 0.82];
 const SCAN_PERIOD  = 2400;
 
-function ScanSlide({ active }) {
+function ScanSlide({ active, illusHeight }) {
   const scanAnim     = useRef(new Animated.Value(0)).current;
   const itemOpacities = useRef(RECEIPT_ITEMS.map(() => new Animated.Value(0.15))).current;
   const [revealedCount, setRevealedCount] = useState(0);
@@ -369,11 +367,11 @@ function ScanSlide({ active }) {
     return () => { cancelled = true; allTimers.forEach(clearTimeout); scanAnim.stopAnimation(); };
   }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const scanTranslate = scanAnim.interpolate({ inputRange: [0, 1], outputRange: [20, ILLUS_H - 40] });
+  const scanTranslate = scanAnim.interpolate({ inputRange: [0, 1], outputRange: [20, illusHeight - 40] });
 
   return (
     <View style={styles.slideContent}>
-      <View style={[styles.illustrationBox, { height: ILLUS_H }]}>
+      <View style={[styles.illustrationBox, { height: illusHeight }]}>
         <LinearGradient colors={[MINT_TINT, '#FFFFFF']} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={StyleSheet.absoluteFill} />
         <View style={[styles.vfCorner, { top: 14, left: 14, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 9 }]} />
         <View style={[styles.vfCorner, { top: 14, right: 14, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 9 }]} />
@@ -419,7 +417,7 @@ const PAYERS = [
   { id: 'L', name: 'Liam',   amount: 34.67, color: '#5B8DEF', method: 'Venmo'     },
 ];
 
-function SettleSlide({ active }) {
+function SettleSlide({ active, illusHeight }) {
   const [step, setStep] = useState(0);
   const progressAnim     = useRef(new Animated.Value(0)).current;
   const celebrateOpacity = useRef(new Animated.Value(0)).current;
@@ -446,7 +444,7 @@ function SettleSlide({ active }) {
 
   return (
     <View style={styles.slideContent}>
-      <View style={[styles.illustrationBox, { height: ILLUS_H }]}>
+      <View style={[styles.illustrationBox, { height: illusHeight }]}>
         {step < 4 ? (
           <>
             <LinearGradient colors={[MINT_TINT, '#FFFFFF']} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={StyleSheet.absoluteFill} />
@@ -507,6 +505,11 @@ function SettleSlide({ active }) {
 // Main Landing Screen
 // ─────────────────────────────────────────────────────────────
 export default function LandingScreen({ navigation }) {
+  const { width: SW, height: SH } = useWindowDimensions();
+  const illusH = Math.min(280, SH * 0.38);
+  const swRef = useRef(SW);
+  swRef.current = SW;
+
   const insets = useSafeAreaInsets();
   const [currentSlide, setCurrentSlide] = useState(0);
   const currentSlideRef = useRef(0);
@@ -524,11 +527,12 @@ export default function LandingScreen({ navigation }) {
   }, [navigation]);
 
   const goTo = useCallback((index) => {
+    const sw = swRef.current;
     const clamped = Math.max(0, Math.min(NUM_SLIDES - 1, index));
     currentSlideRef.current = clamped;
     setCurrentSlide(clamped);
     Animated.spring(slideAnim, {
-      toValue: -clamped * SW,
+      toValue: -clamped * sw,
       useNativeDriver: true,
       damping: 22,
       stiffness: 200,
@@ -541,7 +545,7 @@ export default function LandingScreen({ navigation }) {
       onMoveShouldSetPanResponder: (_, gs) =>
         Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5 && Math.abs(gs.dx) > 10,
       onPanResponderMove: (_, gs) => {
-        const base = -currentSlideRef.current * SW;
+        const base = -currentSlideRef.current * swRef.current;
         slideAnim.setValue(base + gs.dx);
       },
       onPanResponderRelease: (_, gs) => {
@@ -582,17 +586,18 @@ export default function LandingScreen({ navigation }) {
 
       {/* Slide strip */}
       <View style={styles.stripClip} {...panResponder.panHandlers}>
-        <Animated.View style={[styles.slideStrip, { transform: [{ translateX: slideAnim }] }]}>
-          <View style={styles.slidePane}>
+        <Animated.View style={[styles.slideStrip, { width: NUM_SLIDES * SW }, { transform: [{ translateX: slideAnim }] }]}>
+          <View style={[styles.slidePane, { width: SW }]}>
             <IntroSlide
               active={currentSlide === 0}
               onGetStarted={handleHowItWorks}
               topInset={insets.top}
+              windowWidth={SW}
             />
           </View>
-          <View style={styles.slidePane}><AssignSlide active={currentSlide === 1} /></View>
-          <View style={styles.slidePane}><ScanSlide   active={currentSlide === 2} /></View>
-          <View style={styles.slidePane}><SettleSlide active={currentSlide === 3} /></View>
+          <View style={[styles.slidePane, { width: SW }]}><AssignSlide active={currentSlide === 1} illusHeight={illusH} /></View>
+          <View style={[styles.slidePane, { width: SW }]}><ScanSlide   active={currentSlide === 2} illusHeight={illusH} /></View>
+          <View style={[styles.slidePane, { width: SW }]}><SettleSlide active={currentSlide === 3} illusHeight={illusH} /></View>
         </Animated.View>
       </View>
 
@@ -859,12 +864,10 @@ const styles = StyleSheet.create({
   },
   slideStrip: {
     flexDirection: 'row',
-    width: NUM_SLIDES * SW,
     flex: 1,
   },
   slidePane: {
-    width: SW,
-    flex: 1,
+    alignSelf: 'stretch',
   },
   slideContent: {
     flex: 1,

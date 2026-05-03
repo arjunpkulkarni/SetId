@@ -82,7 +82,8 @@ export default function OnboardingScreen() {
           <Text style={styles.wordmark}>Settld.</Text>
           <Text style={styles.title}>Finish your profile</Text>
           <Text style={styles.subtitle}>
-            Add your full name so people know it&apos;s you.
+            Choose the name you want on shared bills and payment requests — especially
+            if you signed in with Apple.
           </Text>
         </LinearGradient>
 

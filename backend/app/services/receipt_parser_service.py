@@ -5,6 +5,9 @@ import mimetypes
 import os
 import re
 import uuid
+from io import BytesIO
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
@@ -399,6 +402,9 @@ class StructuredOCRPayload(BaseModel):
 
 PREPARSER_CONFIDENCE_THRESHOLD = 0.85
 
+# Deterministic decoding; often marginally faster and matches accuracy-focused use.
+RECEIPT_LLM_TEMPERATURE = 0.0
+
 
 class ReceiptParserService:
     def __init__(self, db: Session):
@@ -617,6 +623,31 @@ class ReceiptParserService:
         )
         return cleaned, rows, structured_ocr if isinstance(structured_ocr, dict) else None
 
+    def _run_one_image_pipeline_indexed(
+        self,
+        idx: int,
+        ent: dict[str, str],
+    ) -> tuple[
+        int,
+        CleanupReceiptPayload | None,
+        list[list[str]] | None,
+        BaseException | None,
+    ]:
+        """Run `_run_one_image_pipeline` for multi-image parallel paths; never raises."""
+        try:
+            cleaned_i, rows_i, _ocr_i = self._run_one_image_pipeline(
+                ent["file_path"], ent["content_type"]
+            )
+            return idx, cleaned_i, rows_i, None
+        except BaseException as exc:
+            logger.exception(
+                "receipt_parse_multi_image_failed bill_id=(parallel) image_index=%s file_path=%s error=%s",
+                idx + 1,
+                ent.get("file_path"),
+                exc,
+            )
+            return idx, None, None, exc
+
     def parse_receipt(self, bill_id: str) -> ParsedReceipt:
         logger.info(
             "receipt_parse_started bill_id=%s pipeline_version=%s",
@@ -694,57 +725,64 @@ class ReceiptParserService:
         intermediates: list[dict] = []
         all_rows: list[list[str]] = []
 
-        # Sequential by design: simpler error handling and deterministic merge order.
-        for idx, ent in enumerate(entries):
-            try:
-                logger.info(
-                    "receipt_parse_multi_image_started bill_id=%s receipt_id=%s image_index=%s file_path=%s content_type=%s",
-                    bill_id,
-                    receipt.id,
-                    idx + 1,
-                    ent.get("file_path"),
-                    ent.get("content_type"),
-                )
-                cleaned_i, rows_i, _ = self._run_one_image_pipeline(
-                    ent["file_path"], ent["content_type"]
-                )
-                all_rows.extend(rows_i or [])
-                intermediates.append(
-                    {
-                        "items": [
-                            it.model_dump(mode="json") for it in cleaned_i.items
-                        ],
-                        "subtotal": float(cleaned_i.subtotal)
-                        if cleaned_i.subtotal is not None
-                        else None,
-                        "tax": float(cleaned_i.tax) if cleaned_i.tax is not None else None,
-                        "tip": float(cleaned_i.tip) if cleaned_i.tip is not None else None,
-                        "total": float(cleaned_i.total)
-                        if cleaned_i.total is not None
-                        else None,
-                        "merchant_name": cleaned_i.merchant_name,
-                        "confidence": float(cleaned_i.confidence),
-                        "source_image_index": idx,
-                    }
-                )
-                logger.info(
-                    "receipt_parse_multi_image_succeeded bill_id=%s receipt_id=%s image_index=%s row_count=%s item_count=%s",
-                    bill_id,
-                    receipt.id,
-                    idx + 1,
-                    len(rows_i or []),
-                    len(cleaned_i.items),
-                )
-            except Exception as exc:
-                logger.exception(
-                    "receipt_parse_multi_image_failed bill_id=%s receipt_id=%s image_index=%s file_path=%s error=%s",
-                    bill_id,
-                    receipt.id,
-                    idx + 1,
-                    ent.get("file_path"),
-                    exc,
-                )
+        max_workers = max(
+            1,
+            min(len(entries), settings.RECEIPT_PARSE_MAX_PARALLEL_IMAGES),
+        )
+        logger.info(
+            "receipt_parse_multi_image_mode bill_id=%s receipt_id=%s image_count=%s max_workers=%s",
+            bill_id,
+            receipt.id,
+            len(entries),
+            max_workers,
+        )
+
+        if max_workers <= 1:
+            result_tuples: list[
+                tuple[int, CleanupReceiptPayload | None, list[list[str]] | None, BaseException | None]
+            ] = []
+            for idx, ent in enumerate(entries):
+                result_tuples.append(self._run_one_image_pipeline_indexed(idx, ent))
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(self._run_one_image_pipeline_indexed, idx, ent)
+                    for idx, ent in enumerate(entries)
+                ]
+                result_tuples = [fut.result() for fut in futures]
+
+        for idx, cleaned_i, rows_i, err in result_tuples:
+            if err is not None:
                 merge_notes.append(f"Failed to parse image {idx + 1}")
+                continue
+            assert cleaned_i is not None
+            logger.info(
+                "receipt_parse_multi_image_succeeded bill_id=%s receipt_id=%s image_index=%s row_count=%s item_count=%s",
+                bill_id,
+                receipt.id,
+                idx + 1,
+                len(rows_i or []),
+                len(cleaned_i.items),
+            )
+            all_rows.extend(rows_i or [])
+            intermediates.append(
+                {
+                    "items": [
+                        it.model_dump(mode="json") for it in cleaned_i.items
+                    ],
+                    "subtotal": float(cleaned_i.subtotal)
+                    if cleaned_i.subtotal is not None
+                    else None,
+                    "tax": float(cleaned_i.tax) if cleaned_i.tax is not None else None,
+                    "tip": float(cleaned_i.tip) if cleaned_i.tip is not None else None,
+                    "total": float(cleaned_i.total)
+                    if cleaned_i.total is not None
+                    else None,
+                    "merchant_name": cleaned_i.merchant_name,
+                    "confidence": float(cleaned_i.confidence),
+                    "source_image_index": idx,
+                }
+            )
 
         if not intermediates:
             logger.warning(
@@ -964,25 +1002,85 @@ class ReceiptParserService:
             receipt.last_parsed_at = None
             receipt.parsed_version = None
 
+    def _maybe_downscale_receipt_raster(
+        self, raw: bytes, content_type: str
+    ) -> tuple[bytes, str]:
+        limit = settings.RECEIPT_VISION_MAX_LONG_EDGE
+        if limit <= 0:
+            return raw, content_type
+        if content_type == "application/pdf" or not content_type.startswith("image/"):
+            return raw, content_type
+        try:
+            from PIL import Image
+        except ImportError:
+            return raw, content_type
+
+        try:
+            img = Image.open(BytesIO(raw))
+            img.load()
+        except Exception:
+            return raw, content_type
+
+        w, h = img.size
+        max_edge = max(w, h)
+        if max_edge <= limit:
+            return raw, content_type
+
+        if img.mode == "RGBA":
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3])
+            img = background
+        elif img.mode == "LA":
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            background.paste(img.convert("RGBA"), mask=img.split()[1])
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        scale = limit / max_edge
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        q = settings.RECEIPT_VISION_JPEG_QUALITY
+        if not 1 <= q <= 95:
+            q = 87
+
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=q, optimize=True)
+        out = buf.getvalue()
+        logger.info(
+            "receipt_vision_image_resized max_edge_was=%s new_size=%sx%s bytes_in=%s bytes_out=%s",
+            max_edge,
+            new_w,
+            new_h,
+            len(raw),
+            len(out),
+        )
+        return out, "image/jpeg"
+
+    def _vision_b64_for_upload(self, file_path: str, content_type: str) -> tuple[str, str]:
+        if not os.path.exists(file_path):
+            raise ValueError("Uploaded receipt file is missing from storage")
+        raw = Path(file_path).read_bytes()
+        ct = content_type
+        if "/" not in ct:
+            ct = mimetypes.guess_type(file_path)[0] or "image/jpeg"
+        processed, ct_out = self._maybe_downscale_receipt_raster(raw, ct)
+        return base64.b64encode(processed).decode("utf-8"), ct_out
+
     def _extract_structured_ocr_from_path(
         self, file_path: str, content_type: str
     ) -> tuple[dict | None, str]:
         if not self._client:
             raise ValueError("Receipt OCR API key is not configured")
 
-        if not os.path.exists(file_path):
-            raise ValueError("Uploaded receipt file is missing from storage")
-
-        with open(file_path, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode("utf-8")
-
-        ct = content_type
-        if "/" not in ct:
-            ct = mimetypes.guess_type(file_path)[0] or "image/jpeg"
+        encoded, ct = self._vision_b64_for_upload(file_path, content_type)
 
         try:
             response = self._client.chat.completions.create(
                 model=settings.receipt_ai_vision_model,
+                temperature=RECEIPT_LLM_TEMPERATURE,
                 messages=[
                     {
                         "role": "user",
@@ -1043,15 +1141,16 @@ class ReceiptParserService:
             raise ValueError("Uploaded receipt file is missing from storage")
 
         if encoded is None:
-            with open(file_path, "rb") as f:
-                encoded = base64.b64encode(f.read()).decode("utf-8")
-
-        ct = content_type or "image/jpeg"
-        if "/" not in ct:
-            ct = mimetypes.guess_type(file_path)[0] or "image/jpeg"
+            encoded, guessed_ct = self._vision_b64_for_upload(file_path, content_type or "")
+            ct = guessed_ct
+        else:
+            ct = content_type or "image/jpeg"
+            if "/" not in ct:
+                ct = mimetypes.guess_type(file_path)[0] or "image/jpeg"
 
         response = self._client.chat.completions.create(
             model=settings.receipt_ai_vision_model,
+            temperature=RECEIPT_LLM_TEMPERATURE,
             messages=[
                 {
                     "role": "user",
@@ -1167,6 +1266,7 @@ class ReceiptParserService:
         for _ in range(2):
             response = self._client.chat.completions.create(
                 model=settings.receipt_ai_cleanup_model,
+                temperature=RECEIPT_LLM_TEMPERATURE,
                 messages=[
                     {"role": "system", "content": CLEANUP_SYSTEM_PROMPT},
                     {"role": "user", "content": json.dumps(user_payload)},

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useDispatch, useStore } from 'react-redux';
 import {
   View,
@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
-  Dimensions,
   Animated,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -20,7 +19,7 @@ import { Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from '@react-navigation/native';
-import { colors, radii, shadows, spacing } from '../theme';
+import { colors, radii, shadows } from '../theme';
 import { useAuth } from '../contexts/AuthContext';
 import { bills } from '../services/api';
 import {
@@ -33,8 +32,12 @@ import {
 import { offlineStorage } from '../services/offlineStorage';
 import LazyImage from '../components/LazyImage';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
+/** Dashboard marketing / mockup palette */
+const DASHBOARD_GREEN = '#004D40';
+const DASHBOARD_GREEN_MID = '#00695C';
+const RECEIPT_ICON_FEATURED_BG = '#FCE4EC';
+const RECEIPT_ICON_FEATURED_FG = '#880E4F';
+const MINT_ICON_BG = '#E0F2F1';
 
 
 /** Keeps header compact so action icons stay on-screen (E.164 is very long). */
@@ -60,6 +63,7 @@ const ACTIVITY_TYPE_META = {
   payment_sent: { icon: 'arrow-upward', positive: false },
   member_joined: { icon: 'person-add', positive: true },
   receipt_parsed: { icon: 'document-scanner', positive: true },
+  past_bill: { icon: 'history', positive: true, neutralAmount: true },
 };
 
 function formatCurrency(value) {
@@ -69,7 +73,9 @@ function formatCurrency(value) {
 }
 
 function formatRelativeTime(timestamp) {
-  const date = new Date(timestamp);
+  if (timestamp == null) return '';
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
   const now = new Date();
   const diffMs = now - date;
   const diffMins = Math.floor(diffMs / 60000);
@@ -84,17 +90,46 @@ function formatRelativeTime(timestamp) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+function pastBillStatusLabel(status) {
+  if (!status) return 'Past bill';
+  if (status === 'settled') return 'Settled';
+  return `${status}`.replace(/_/g, ' ');
+}
+
+/** Feed the Recent activity list from non-active bills returned on `/dashboard`. */
+function mapPastBillsToActivityItems(pastBills) {
+  return (pastBills ?? []).map((b) => ({
+    type: 'past_bill',
+    bill_id: b.id,
+    bill_title: b.title || b.merchant_name || 'Bill',
+    description: '',
+    amount: b.total != null ? parseFloat(String(b.total)) : null,
+    timestamp: b.updated_at || b.created_at,
+    status_label: pastBillStatusLabel(b.status),
+    member_count: b.member_count ?? 0,
+  }));
+}
+
 // ─── Sub-components ──────────────────────────────────────────────────────────
+
+function firstNameFromUser(user) {
+  const raw =
+    user?.full_name && user.full_name !== 'Member'
+      ? user.full_name
+      : user?.phone
+        ? user.phone
+        : '';
+  if (!raw) return 'Member';
+  if (typeof raw === 'string' && raw.startsWith('+')) {
+    return compactDisplayName(raw);
+  }
+  const first = `${raw}`.trim().split(/\s+/)[0];
+  return first.length > 16 ? `${first.slice(0, 14)}…` : first;
+}
 
 function TopAppBar({ insets, user }) {
   const { logout } = useAuth();
-
-  const displayName =
-    user?.full_name && user.full_name !== 'Member'
-      ? compactDisplayName(user.full_name)
-      : user?.phone
-        ? compactDisplayName(user.phone)
-        : 'Member';
+  const firstName = firstNameFromUser(user);
 
   const initials = (user?.full_name || user?.phone || '?')
     .toString()
@@ -105,8 +140,8 @@ function TopAppBar({ insets, user }) {
     .slice(0, 2)
     .toUpperCase() || '?';
 
-  const onLogout = () => {
-    Alert.alert('Log out', 'Sign out of WealthSplit on this device?', [
+  const confirmLogout = () => {
+    Alert.alert('Log out', 'Sign out of Settld on this device?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Log out', style: 'destructive', onPress: () => logout() },
     ]);
@@ -115,37 +150,31 @@ function TopAppBar({ insets, user }) {
   return (
     <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
       <View style={styles.topBarInner}>
-        <View style={styles.profileRow}>
-          <View style={styles.avatarContainer}>
-            {user?.avatar_url ? (
-              <LazyImage
-                source={{ uri: user.avatar_url }}
-                style={styles.profileAvatar}
-                fallbackIcon="person"
-              />
-            ) : (
-              <View style={[styles.profileAvatar, styles.initialsAvatar]}>
-                <Text style={styles.initialsText}>{initials}</Text>
-              </View>
-            )}
-          </View>
-          <View style={styles.profileTextCol}>
-            <Text style={styles.welcomeLabel}>Welcome back,</Text>
-            <Text style={styles.userName} numberOfLines={1} ellipsizeMode="tail">
-              {displayName}
-            </Text>
-          </View>
+        <View style={styles.greetingBlock}>
+          <Text style={styles.greetingName} numberOfLines={1}>
+            {firstName}
+          </Text>
+          <Text style={styles.greetingRest}>Welcome back! 👋</Text>
         </View>
-        <View style={styles.topBarActions}>
-          <TouchableOpacity
-            style={styles.iconButtonWrap}
-            activeOpacity={0.7}
-            onPress={onLogout}
-            accessibilityLabel="Log out"
-          >
-            <MaterialIcons name="logout" size={22} color={colors.onSurfaceVariant} />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          accessibilityLabel="Account"
+          accessibilityHint="Long press to log out"
+          onLongPress={confirmLogout}
+          activeOpacity={0.85}
+          style={styles.headerAvatarBtn}
+        >
+          {user?.avatar_url ? (
+            <LazyImage
+              source={{ uri: user.avatar_url }}
+              style={styles.headerAvatarImg}
+              fallbackIcon="person"
+            />
+          ) : (
+            <View style={styles.headerAvatarCircle}>
+              <Text style={styles.headerAvatarInitials}>{initials}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -155,59 +184,49 @@ function BalanceHero({ overview, isLoading }) {
   const owedToYou = parseFloat(overview?.total_owed_to_you ?? 0);
   const youOwe = parseFloat(overview?.total_you_owe ?? 0);
   const net = owedToYou - youOwe;
-  const badgeText = net >= 0
-    ? `+${formatCurrency(net)} owed to you`
-    : `-${formatCurrency(net)} you owe`;
+  const badgeText =
+    net >= 0 ? `+${formatCurrency(net)} owed to you` : `${formatCurrency(Math.abs(net))} you owe`;
 
   return (
-    <View style={styles.balanceHero}>
-      <Text style={styles.balanceLabel}>Current Balance</Text>
-      {isLoading ? (
-        // Reserve the same vertical space the real amount would take so the
-        // badge below doesn't jump when data arrives.
-        <View style={styles.balanceLoader}>
-          <ActivityIndicator size="large" color={colors.secondary} />
-        </View>
-      ) : (
-        <>
-          <Text style={styles.balanceAmount}>
-            {net < 0 ? '-' : ''}{formatCurrency(net)}
-          </Text>
-          <View style={styles.badgeRow}>
-            <View style={[styles.weeklyBadge, net < 0 && styles.weeklyBadgeNegative]}>
-              <Text style={[styles.weeklyBadgeText, net < 0 && styles.weeklyBadgeTextNegative]}>
-                {badgeText}
-              </Text>
-            </View>
+    <View style={styles.balanceHeroWrap}>
+      <LinearGradient
+        colors={[DASHBOARD_GREEN, DASHBOARD_GREEN_MID]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.balanceGradientCard, shadows.card]}
+      >
+        <View style={styles.balanceCardRow}>
+          <View style={styles.balanceCardMain}>
+            <Text style={styles.balanceLabelOnDark}>Current Balance</Text>
+            {isLoading ? (
+              <View style={styles.balanceLoaderDark}>
+                <ActivityIndicator size="large" color="rgba(255,255,255,0.85)" />
+              </View>
+            ) : (
+              <>
+                <Text style={styles.balanceAmountOnDark}>
+                  {net < 0 ? '-' : ''}
+                  {formatCurrency(net)}
+                </Text>
+                <View style={[styles.balanceTrendBadge, net < 0 && styles.balanceTrendBadgeNeg]}>
+                  <Text
+                    style={[styles.balanceTrendBadgeText, net < 0 && styles.balanceTrendBadgeTextNeg]}
+                    numberOfLines={1}
+                  >
+                    {net >= 0 ? '↗ ' : '↘ '}
+                    {badgeText}
+                  </Text>
+                </View>
+              </>
+            )}
           </View>
-        </>
-      )}
-    </View>
-  );
-}
-
-function MemberCountBubbles({ count }) {
-  const shown = Math.min(count, 3);
-  const extra = count - shown;
-  return (
-    <View style={styles.avatarStack}>
-      {Array.from({ length: shown }).map((_, i) => (
-        <View
-          key={i}
-          style={[
-            styles.stackAvatar,
-            styles.placeholderAvatar,
-            { marginLeft: i === 0 ? 0 : -12, zIndex: shown - i },
-          ]}
-        >
-          <MaterialIcons name="person" size={18} color={colors.onSurfaceVariant} />
+          {!isLoading ? (
+            <View style={styles.balanceDollarRing}>
+              <MaterialIcons name="attach-money" size={28} color="rgba(255,255,255,0.92)" />
+            </View>
+          ) : null}
         </View>
-      ))}
-      {extra > 0 && (
-        <View style={[styles.stackOverflow, { marginLeft: -12 }]}>
-          <Text style={styles.stackOverflowText}>+{extra}</Text>
-        </View>
-      )}
+      </LinearGradient>
     </View>
   );
 }
@@ -303,53 +322,63 @@ function SwipeToDeleteBill({ bill, onDelete, children }) {
   );
 }
 
-function FeaturedBillCard({ bill, onSettle }) {
+function FeaturedBillCard({ bill, onSettle, onOpenBill }) {
   if (!bill) return null;
   const remaining = parseFloat(bill.remaining ?? bill.total ?? 0);
 
   return (
     <View style={[styles.featuredCard, shadows.card]}>
-      <View style={styles.featuredCardTop}>
-        <View style={styles.featuredIconWrap}>
-          <MaterialIcons name="receipt-long" size={24} color={colors.tertiary} />
-        </View>
-        {remaining > 50 && (
-          <View style={styles.priorityBadge}>
-            <Text style={styles.priorityText}>High Priority</Text>
+      <TouchableOpacity activeOpacity={0.92} onPress={() => onOpenBill(bill)}>
+        <View style={styles.featuredCardHeaderRow}>
+          <View style={styles.featuredIconWrapFeatured}>
+            <MaterialIcons name="receipt-long" size={22} color={RECEIPT_ICON_FEATURED_FG} />
           </View>
-        )}
-      </View>
-      <Text style={styles.featuredTitle} numberOfLines={1}>
-        {bill.title || bill.merchant_name}
-      </Text>
-      <Text style={styles.featuredSubtitle}>
-        Split between {bill.member_count} {bill.member_count === 1 ? 'person' : 'people'}
-      </Text>
-      <View style={styles.featuredBottom}>
-        <MemberCountBubbles count={bill.member_count} />
-        <View style={styles.settleRow}>
-          <Text style={styles.featuredAmount}>{formatCurrency(remaining)}</Text>
-          <TouchableOpacity activeOpacity={0.85} onPress={() => onSettle(bill)}>
-            <LinearGradient
-              colors={[colors.secondary, colors.secondaryDim]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[styles.settleButton, shadows.settleButton]}
-            >
-              <Text style={styles.settleButtonText}>Settle Now</Text>
-            </LinearGradient>
-          </TouchableOpacity>
+          <View style={styles.featuredHeaderText}>
+            <Text style={styles.featuredTitle} numberOfLines={1}>
+              {bill.title || bill.merchant_name}
+            </Text>
+            <Text style={styles.featuredSubtitle}>
+              Split between {bill.member_count} {bill.member_count === 1 ? 'person' : 'people'}
+            </Text>
+          </View>
+          <MaterialIcons name="chevron-right" size={24} color={colors.outlineVariant} />
         </View>
+        <View style={styles.featuredParticipantsRow}>
+          <MaterialIcons name="person-outline" size={18} color={colors.onSurfaceVariant} />
+          <Text style={styles.featuredParticipantsText}>
+            {bill.member_count} {bill.member_count === 1 ? 'participant' : 'participants'}
+          </Text>
+        </View>
+      </TouchableOpacity>
+      <View style={styles.featuredAmountFooter}>
+        <View style={styles.featuredAmountCol}>
+          <Text style={styles.amountDueLabel}>Amount due</Text>
+          <Text style={styles.featuredAmountLarge}>{formatCurrency(remaining)}</Text>
+        </View>
+        <TouchableOpacity activeOpacity={0.85} onPress={() => onSettle(bill)}>
+          <LinearGradient
+            colors={[DASHBOARD_GREEN, DASHBOARD_GREEN_MID]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.settleButtonDark, shadows.settleButton]}
+          >
+            <Text style={styles.settleButtonText}>Settle Now</Text>
+          </LinearGradient>
+        </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-function SecondaryBillCard({ bill }) {
+function SecondaryBillCard({ bill, onOpenBill }) {
   return (
-    <View style={styles.secondaryCard}>
-      <View style={styles.secondaryIconWrap}>
-        <MaterialIcons name="receipt-long" size={22} color={colors.secondary} />
+    <TouchableOpacity
+      style={[styles.secondaryCard, shadows.card]}
+      activeOpacity={0.92}
+      onPress={() => onOpenBill(bill)}
+    >
+      <View style={styles.secondaryIconWrapMint}>
+        <MaterialIcons name="receipt-long" size={22} color={DASHBOARD_GREEN} />
       </View>
       <View style={styles.secondaryInfo}>
         <Text style={styles.secondaryTitle} numberOfLines={1}>
@@ -359,12 +388,12 @@ function SecondaryBillCard({ bill }) {
           {bill.status} • {bill.member_count} {bill.member_count === 1 ? 'member' : 'members'}
         </Text>
       </View>
-      <Text style={styles.secondaryAmount}>{formatCurrency(bill.remaining ?? bill.total)}</Text>
-    </View>
+      <MaterialIcons name="chevron-right" size={22} color={colors.outlineVariant} />
+    </TouchableOpacity>
   );
 }
 
-function ActiveBillsSection({ bills, onSettle, onDelete, isLoading }) {
+function ActiveBillsSection({ bills, onSettle, onDelete, onOpenBill, onViewAll, isLoading }) {
   // While the backend is cold-starting, show a card-shaped spinner so the
   // page layout stays stable instead of collapsing to an empty state.
   if (isLoading) {
@@ -372,9 +401,14 @@ function ActiveBillsSection({ bills, onSettle, onDelete, isLoading }) {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Active Bills</Text>
+          {onViewAll ? (
+            <TouchableOpacity onPress={onViewAll} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={styles.viewAllText}>View all</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
         <View style={[styles.loadingCard, shadows.card]}>
-          <ActivityIndicator size="large" color={colors.secondary} />
+          <ActivityIndicator size="large" color={DASHBOARD_GREEN} />
           <Text style={styles.loadingText}>Loading your bills…</Text>
         </View>
       </View>
@@ -386,6 +420,11 @@ function ActiveBillsSection({ bills, onSettle, onDelete, isLoading }) {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Active Bills</Text>
+          {onViewAll ? (
+            <TouchableOpacity onPress={onViewAll} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={styles.viewAllText}>View all</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
         <View style={[styles.emptyCard, shadows.card]}>
           <MaterialIcons name="receipt-long" size={40} color={colors.outlineVariant} />
@@ -401,16 +440,21 @@ function ActiveBillsSection({ bills, onSettle, onDelete, isLoading }) {
   return (
     <View style={styles.section}>
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Active Bills</Text>        
+        <Text style={styles.sectionTitle}>Active Bills</Text>
+        {onViewAll ? (
+          <TouchableOpacity onPress={onViewAll} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={styles.viewAllText}>View all</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
       <SwipeToDeleteBill bill={featured} onDelete={onDelete}>
-        <FeaturedBillCard bill={featured} onSettle={onSettle} />
+        <FeaturedBillCard bill={featured} onSettle={onSettle} onOpenBill={onOpenBill} />
       </SwipeToDeleteBill>
       {rest.length > 0 && <View style={styles.secondaryBillsGap} />}
       {rest.slice(0, 3).map((bill) => (
         <React.Fragment key={bill.id}>
           <SwipeToDeleteBill bill={bill} onDelete={onDelete}>
-            <SecondaryBillCard bill={bill} />
+            <SecondaryBillCard bill={bill} onOpenBill={onOpenBill} />
           </SwipeToDeleteBill>
           <View style={styles.billCardGap} />
         </React.Fragment>
@@ -421,8 +465,21 @@ function ActiveBillsSection({ bills, onSettle, onDelete, isLoading }) {
 
 function ActivityItem({ item, isLast, onPress }) {
   const meta = ACTIVITY_TYPE_META[item.type] || { icon: 'info', positive: true };
-  const hasAmount = item.amount != null;
+  const hasAmount = item.amount != null && Number.isFinite(item.amount);
   const positive = meta.positive;
+  const neutralAmount = !!meta.neutralAmount;
+
+  const statusLabel =
+    item.type === 'past_bill'
+      ? (item.status_label || 'Past bill')
+      : item.type.replace(/_/g, ' ');
+
+  const subtitle =
+    item.type === 'past_bill' && item.member_count != null
+      ? `${formatRelativeTime(item.timestamp)} · ${item.member_count} ${
+          item.member_count === 1 ? 'person' : 'people'
+        }`
+      : formatRelativeTime(item.timestamp);
 
   return (
     <TouchableOpacity
@@ -437,22 +494,23 @@ function ActivityItem({ item, isLast, onPress }) {
         <Text style={styles.activityTitle} numberOfLines={1}>
           {item.bill_title || item.description}
         </Text>
-        <Text style={styles.activityDate}>{formatRelativeTime(item.timestamp)}</Text>
+        <Text style={styles.activityDate}>{subtitle}</Text>
       </View>
       <View style={styles.activityRight}>
         {hasAmount && (
           <Text
             style={[
               styles.activityAmount,
-              { color: positive ? colors.secondary : colors.error },
+              neutralAmount && styles.activityAmountNeutral,
+              !neutralAmount && { color: positive ? colors.secondary : colors.error },
             ]}
           >
-            {positive ? '+' : '-'}{formatCurrency(item.amount)}
+            {neutralAmount
+              ? formatCurrency(item.amount)
+              : `${positive ? '+' : '-'}${formatCurrency(item.amount)}`}
           </Text>
         )}
-        <Text style={styles.activityStatus}>
-          {item.type.replace(/_/g, ' ')}
-        </Text>
+        <Text style={styles.activityStatus}>{statusLabel}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -461,23 +519,28 @@ function ActivityItem({ item, isLast, onPress }) {
 function RecentActivitySection({ activities, onItemPress }) {
   if (!activities || activities.length === 0) {
     return (
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Recent Activity</Text>
+      <View style={[styles.section, styles.sectionRecentActivity]}>
+        <Text style={styles.sectionTitle}>Recent activity</Text>
         <View style={[styles.emptyCard, shadows.card]}>
           <MaterialIcons name="history" size={40} color={colors.outlineVariant} />
-          <Text style={styles.emptyText}>No recent activity</Text>
+          <Text style={styles.emptyText}>No past bills yet</Text>
+          <Text style={styles.emptySubtext}>Settled and closed bills show up here</Text>
         </View>
       </View>
     );
   }
 
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Recent Activity</Text>
+    <View style={[styles.section, styles.sectionRecentActivity]}>
+      <Text style={styles.sectionTitle}>Recent activity</Text>
       <View style={[styles.activityCard, shadows.card]}>
         {activities.map((item, i) => (
           <ActivityItem
-            key={`${item.type}-${item.timestamp}-${i}`}
+            key={
+              item.bill_id
+                ? `past-bill-${item.bill_id}`
+                : `${item.type}-${String(item.timestamp)}-${i}`
+            }
             item={item}
             isLast={i === activities.length - 1}
             onPress={() => onItemPress(item)}
@@ -497,15 +560,15 @@ function FloatingActionButton({ bottomOffset, onPress, loading }) {
       style={[styles.fab, shadows.fab, { bottom: bottomOffset }]}
     >
       <LinearGradient
-        colors={[colors.secondary, colors.secondaryDim]}
+        colors={[DASHBOARD_GREEN, DASHBOARD_GREEN_MID]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={[styles.fabGradient, loading && styles.fabGradientDisabled]}
       >
         {loading ? (
-          <ActivityIndicator color={colors.onSecondary} />
+          <ActivityIndicator color="#FFFFFF" />
         ) : (
-          <MaterialIcons name="add" size={28} color={colors.onSecondary} />
+          <MaterialIcons name="add" size={28} color="#FFFFFF" />
         )}
       </LinearGradient>
     </TouchableOpacity>
@@ -557,6 +620,7 @@ export default function DashboardScreen({ navigation }) {
 
   const overview = data?.overview ?? null;
   const activeBills = data?.activeBills ?? [];
+  const pastBills = data?.pastBills ?? [];
 
   // Per-section loading flags. We *don't* gate the whole page on these —
   // the layout always renders so the user immediately sees their name,
@@ -569,7 +633,10 @@ export default function DashboardScreen({ navigation }) {
   const balanceLoading = !overview && (dashboardLoading || !hydrated);
   const billsLoadingInline =
     activeBills.length === 0 && (dashboardLoading || !hydrated);
-  const recentActivity = [];
+  const recentActivity = useMemo(
+    () => mapPastBillsToActivityItems(pastBills),
+    [pastBills],
+  );
 
   const [refreshing, setRefreshing] = useState(false);
   const [creatingBill, setCreatingBill] = useState(false);
@@ -616,6 +683,20 @@ export default function DashboardScreen({ navigation }) {
   const handleSettle = (bill) => {
     navigation.navigate('BillSplit', { billId: bill.id });
   };
+
+  const handleOpenBill = useCallback(
+    (bill) => {
+      if (bill?.id) navigation.navigate('BillSplit', { billId: bill.id });
+    },
+    [navigation],
+  );
+
+  const handleViewAllBills = useCallback(() => {
+    const parent = navigation.getParent?.();
+    if (parent?.navigate) {
+      parent.navigate('Notifications');
+    }
+  }, [navigation]);
 
   const handleDeleteBill = useCallback(
     async (bill) => {
@@ -680,7 +761,7 @@ export default function DashboardScreen({ navigation }) {
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: insets.top + 72, paddingBottom: tabBarHeight + 88 },
+          { paddingTop: insets.top + 72, paddingBottom: tabBarHeight + 120 },
         ]}
         showsVerticalScrollIndicator={false}
         // When the dashboard fits on a single screen there's nothing to scroll to,
@@ -692,7 +773,7 @@ export default function DashboardScreen({ navigation }) {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor={colors.secondary}
+            tintColor={DASHBOARD_GREEN}
           />
         }
       >
@@ -701,18 +782,20 @@ export default function DashboardScreen({ navigation }) {
           bills={activeBills}
           onSettle={handleSettle}
           onDelete={handleDeleteBill}
+          onOpenBill={handleOpenBill}
+          onViewAll={handleViewAllBills}
           isLoading={billsLoadingInline}
         />
         <RecentActivitySection
           activities={recentActivity}
           onItemPress={(item) => {
-            if (item.bill_id) navigation.navigate('ActivityDetail', { billId: item.bill_id });
+            if (item.bill_id) navigation.navigate('BillSplit', { billId: item.bill_id });
           }}
         />
       </ScrollView>
 
       <FloatingActionButton
-        bottomOffset={insets.bottom - 8}
+        bottomOffset={tabBarHeight + Math.max(insets.bottom, 6) + 4}
         loading={creatingBill}
         onPress={handleCreateBillFromReceipt}
       />
@@ -738,10 +821,10 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 50,
-    backgroundColor: 'rgba(248, 249, 250, 0.7)',
+    backgroundColor: 'rgba(248, 249, 250, 0.88)',
     ...Platform.select({
       ios: {},
-      android: { backgroundColor: 'rgba(248, 249, 250, 0.92)' },
+      android: { backgroundColor: 'rgba(248, 249, 250, 0.95)' },
     }),
   },
   topBarInner: {
@@ -749,84 +832,47 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 24,
-    paddingBottom: 12,
+    paddingBottom: 14,
   },
-  topBarActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexShrink: 0,
-  },
-  profileRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+  greetingBlock: {
     flex: 1,
-    minWidth: 0,
-    marginRight: 8,
+    paddingRight: 12,
   },
-  profileTextCol: {
-    flex: 1,
-    minWidth: 0,
-  },
-  avatarContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: colors.surfaceContainerHighest,
-  },
-  profileAvatar: {
-    width: 40,
-    height: 40,
-  },
-  initialsAvatar: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.secondaryContainer,
-    borderRadius: 20,
-  },
-  initialsText: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.secondary,
-  },
-  welcomeLabel: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 11,
-    fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 1.5,
-    color: colors.onSurfaceVariant,
-  },
-  userName: {
+  greetingName: {
     fontFamily: 'Manrope_700Bold',
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: '700',
     letterSpacing: -0.3,
     color: colors.onSurface,
   },
-  iconButtonWrap: {
-    padding: 8,
-    position: 'relative',
+  greetingRest: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 15,
+    lineHeight: 22,
+    color: colors.onSurfaceVariant,
+    marginTop: 4,
   },
-  notifBadge: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: colors.error,
+  headerAvatarBtn: {
+    flexShrink: 0,
+  },
+  headerAvatarCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#00897B',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 4,
   },
-  notifBadgeText: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 10,
+  headerAvatarInitials: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 18,
     fontWeight: '700',
-    color: colors.onError,
+    color: '#FFFFFF',
+  },
+  headerAvatarImg: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
   },
 
   scroll: {
@@ -836,64 +882,87 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
 
-  balanceHero: {
-    alignItems: 'center',
-    paddingVertical: 32,
+  balanceHeroWrap: {
+    marginBottom: 8,
   },
-  balanceLabel: {
+  balanceGradientCard: {
+    borderRadius: radii.xl,
+    padding: 24,
+    overflow: 'hidden',
+  },
+  balanceCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  balanceCardMain: {
+    flex: 1,
+    paddingRight: 12,
+    minWidth: 0,
+  },
+  balanceLabelOnDark: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '500',
     textTransform: 'uppercase',
-    letterSpacing: 2,
-    color: colors.onSurfaceVariant,
-    marginBottom: 4,
+    letterSpacing: 1.6,
+    color: 'rgba(255,255,255,0.72)',
+    marginBottom: 8,
   },
-  balanceAmount: {
+  balanceAmountOnDark: {
     fontFamily: 'Manrope_800ExtraBold',
-    fontSize: 48,
+    fontSize: 40,
     fontWeight: '800',
-    letterSpacing: -2,
-    color: colors.onSurface,
+    letterSpacing: -1.5,
+    color: '#FFFFFF',
   },
-  // 84px ≈ the combined height of the $48 amount + the badge row below it,
-  // so swapping spinner → real content doesn't shift the page.
-  balanceLoader: {
-    height: 84,
-    alignItems: 'center',
+  balanceLoaderDark: {
+    height: 72,
+    alignItems: 'flex-start',
     justifyContent: 'center',
+    paddingVertical: 8,
   },
-  badgeRow: {
-    flexDirection: 'row',
-    marginTop: 16,
-  },
-  weeklyBadge: {
-    backgroundColor: colors.secondaryContainer,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
+  balanceTrendBadge: {
+    alignSelf: 'flex-start',
+    marginTop: 14,
+    backgroundColor: '#B2DFDB',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: radii.full,
   },
-  weeklyBadgeNegative: {
-    backgroundColor: colors.errorContainer,
+  balanceTrendBadgeNeg: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
   },
-  weeklyBadgeText: {
+  balanceTrendBadgeText: {
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
-    color: colors.onSecondaryContainer,
+    color: DASHBOARD_GREEN,
   },
-  weeklyBadgeTextNegative: {
-    color: colors.error,
+  balanceTrendBadgeTextNeg: {
+    color: '#FFFFFF',
+  },
+  balanceDollarRing: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   section: {
     marginTop: 16,
     marginBottom: 32,
   },
+  sectionRecentActivity: {
+    marginBottom: 56,
+  },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     marginBottom: 16,
   },
   sectionTitle: {
@@ -902,13 +971,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: -0.3,
     color: colors.onSurface,
-    marginBottom: 10
   },
   viewAllText: {
     fontFamily: 'Inter_600SemiBold',
     fontSize: 14,
     fontWeight: '600',
-    color: colors.secondary,
+    color: DASHBOARD_GREEN,
   },
 
   emptyCard: {
@@ -948,104 +1016,89 @@ const styles = StyleSheet.create({
   featuredCard: {
     backgroundColor: colors.surfaceContainerLowest,
     borderRadius: radii.xl,
-    padding: 24,
+    padding: 20,
   },
-  featuredCardTop: {
+  featuredCardHeaderRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 16,
+    alignItems: 'center',
+    gap: 14,
   },
-  featuredIconWrap: {
+  featuredIconWrapFeatured: {
     width: 48,
     height: 48,
-    borderRadius: 16,
-    backgroundColor: colors.tertiaryContainer,
+    borderRadius: 14,
+    backgroundColor: RECEIPT_ICON_FEATURED_BG,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  priorityBadge: {
-    backgroundColor: colors.errorContainer,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: radii.sm,
-  },
-  priorityText: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.error,
+  featuredHeaderText: {
+    flex: 1,
+    minWidth: 0,
   },
   featuredTitle: {
     fontFamily: 'Manrope_700Bold',
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: '700',
     color: colors.onSurface,
     marginBottom: 4,
   },
   featuredSubtitle: {
     fontFamily: 'Inter_400Regular',
-    fontSize: 14,
+    fontSize: 13,
     color: colors.onSurfaceVariant,
   },
-  featuredBottom: {
-    marginTop: 24,
-  },
-  settleRow: {
+  featuredParticipantsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
     marginTop: 16,
   },
-  featuredAmount: {
+  featuredParticipantsText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    fontWeight: '500',
+    color: colors.onSurfaceVariant,
+  },
+  featuredAmountFooter: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    marginTop: 24,
+    paddingTop: 20,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.surfaceContainerHigh,
+  },
+  featuredAmountCol: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 12,
+  },
+  amountDueLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: colors.onSurfaceVariant,
+    marginBottom: 6,
+  },
+  featuredAmountLarge: {
     fontFamily: 'Manrope_800ExtraBold',
     fontSize: 28,
     fontWeight: '800',
+    letterSpacing: -0.5,
     color: colors.onSurface,
   },
-  settleButton: {
-    paddingHorizontal: 24,
-    paddingVertical: 10,
+  settleButtonDark: {
+    paddingHorizontal: 22,
+    paddingVertical: 12,
     borderRadius: radii.full,
   },
   settleButtonText: {
     fontFamily: 'Inter_700Bold',
     fontSize: 14,
     fontWeight: '700',
-    color: colors.onSecondary,
-  },
-
-  avatarStack: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  stackAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 3,
-    borderColor: colors.surfaceContainerLowest,
-  },
-  placeholderAvatar: {
-    backgroundColor: colors.surfaceContainer,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stackOverflow: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 3,
-    borderColor: colors.surfaceContainerLowest,
-    backgroundColor: colors.surfaceContainer,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stackOverflowText: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.onSurfaceVariant,
+    color: '#FFFFFF',
   },
 
   secondaryBillsGap: {
@@ -1055,42 +1108,39 @@ const styles = StyleSheet.create({
     height: 12,
   },
   secondaryCard: {
-    backgroundColor: colors.surfaceContainerLow,
+    backgroundColor: colors.surfaceContainerLowest,
     borderRadius: radii.xl,
-    padding: 20,
+    paddingVertical: 18,
+    paddingHorizontal: 18,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
+    gap: 14,
   },
-  secondaryIconWrap: {
+  secondaryIconWrapMint: {
     width: 48,
     height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: 14,
+    backgroundColor: MINT_ICON_BG,
     alignItems: 'center',
     justifyContent: 'center',
   },
   secondaryInfo: {
     flex: 1,
+    minWidth: 0,
   },
   secondaryTitle: {
     fontFamily: 'Manrope_700Bold',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '700',
     color: colors.onSurface,
   },
   secondarySubtitle: {
     fontFamily: 'Inter_400Regular',
-    fontSize: 12,
+    fontSize: 13,
     color: colors.onSurfaceVariant,
-    marginTop: 2,
+    marginTop: 3,
   },
-  secondaryAmount: {
-    fontFamily: 'Manrope_700Bold',
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.onSurface,
-  },
+
   activityCard: {
     backgroundColor: colors.surfaceContainerLowest,
     borderRadius: radii.xl,
@@ -1136,6 +1186,9 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_700Bold',
     fontSize: 15,
     fontWeight: '700',
+  },
+  activityAmountNeutral: {
+    color: colors.onSurfaceVariant,
   },
   activityStatus: {
     fontFamily: 'Inter_500Medium',

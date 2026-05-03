@@ -5,7 +5,7 @@ import { offlineStorage } from '../services/offlineStorage';
 
 /** AsyncStorage key for the combined dashboard payload. Bumping this prefix
  *  forces every client to re-fetch (use if the server contract changes). */
-export const DASHBOARD_CACHE_KEY = 'dashboard_v1';
+export const DASHBOARD_CACHE_KEY = 'dashboard_v2';
 /** TTL for persisted dashboard payload (exported for optimistic deletes). */
 export const DASHBOARD_CACHE_TTL = 24 * 60 * 60 * 1000;
 /** Accept a cached payload up to 24h old on cold open — RTK Query refetches
@@ -81,6 +81,7 @@ export const api = createApi({
       transformResponse: (response) => ({
         overview: response.data?.overview ?? null,
         activeBills: response.data?.active_bills ?? [],
+        pastBills: response.data?.past_bills ?? [],
       }),
       providesTags: (result) => {
         const billTags = result?.activeBills

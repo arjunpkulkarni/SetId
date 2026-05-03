@@ -636,6 +636,18 @@ export default function BillSplitScreen({ navigation, route }) {
       >
         <MerchantHeader bill={bill} />
 
+        {visibleItems.length > 0 ? (
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('ReceiptSetupTip', { billId })}
+            style={styles.receiptSetupLink}
+          >
+            <MaterialIcons name="tune" size={18} color={colors.secondary} />
+            <Text style={styles.receiptSetupLinkText}>Tip & party size</Text>
+            <MaterialIcons name="chevron-right" size={20} color={colors.onSurfaceVariant} />
+          </TouchableOpacity>
+        ) : null}
+
         {items.length === 0 ? (
           <EmptyItems
             billId={billId}
@@ -891,6 +903,26 @@ const styles = StyleSheet.create({
 
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24 },
+
+  receiptSetupLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 20,
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+  },
+  receiptSetupLinkText: {
+    flex: 1,
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.onSurface,
+  },
 
   assignSection: { marginBottom: 32 },
   assignHeader: {

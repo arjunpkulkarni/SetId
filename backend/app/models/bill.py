@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,6 +24,9 @@ class Bill(Base):
     )
     subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     tax: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    # When set (≥2), each non-host member owes tax / N; when NULL, tax follows
+    # item subtotal proportion (legacy).
+    expected_party_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tip: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     tip_split_mode: Mapped[str] = mapped_column(String(20), default="proportional")
     service_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)

@@ -18,6 +18,7 @@ from app.schemas.auth import (
     VerifyOtpRequest,
     PhoneAuthData,
     CreateProfileRequest,
+    APPLE_PLACEHOLDER_FULL_NAME,
 )
 from app.services.auth_service import AuthService
 from app.services.otp_service import (
@@ -77,8 +78,22 @@ def create_profile(
 
     existing = db.query(User).filter(User.id == user_id).first()
     if existing:
+        # Apple Sign In often yields no real name (Apple only sends it once). Those
+        # accounts are created with APPLE_PLACEHOLDER_FULL_NAME; let them complete
+        # onboarding / create-profile to set a proper display name.
+        if (
+            (existing.auth_provider or "").lower() == "apple"
+            and (existing.full_name or "").strip() == APPLE_PLACEHOLDER_FULL_NAME
+        ):
+            existing.full_name = body.full_name.strip()
+            db.commit()
+            db.refresh(existing)
+            return success_response(
+                data=UserBrief.model_validate(existing).model_dump(mode="json"),
+                message="Profile updated",
+            )
         return success_response(
-            data=UserBrief.model_validate(existing).model_dump(),
+            data=UserBrief.model_validate(existing).model_dump(mode="json"),
             message="Profile already exists",
         )
 
@@ -296,10 +311,11 @@ async def apple_signin(
         request.client.host if request.client else None,
     )
 
+    brief = UserBrief.model_validate(user)
     auth = PhoneAuthData(
         token=token,
         access_token=token,
-        user=UserBrief.model_validate(user),
-        needs_profile=False,
+        user=brief,
+        needs_profile=brief.needs_display_name,
     )
     return success_response(data=auth.model_dump(mode="json"), message="Signed in with Apple")

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform } from 'react-native';
+import { Platform, View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
 
@@ -9,37 +9,58 @@ import { colors } from '../theme';
 
 const Tab = createBottomTabNavigator();
 
+const TAB_ACTIVE = '#004D40';
+
+function tabBarIconFactory(iconName) {
+  return function TabBarIcon({ color, size, focused }) {
+    return (
+      <View style={{ alignItems: 'center', justifyContent: 'flex-start', minHeight: 48 }}>
+        <MaterialIcons name={iconName} size={size ?? 24} color={color} />
+        <View
+          style={{
+            marginTop: 6,
+            width: 28,
+            height: 3,
+            borderRadius: 2,
+            backgroundColor: focused ? TAB_ACTIVE : 'transparent',
+          }}
+        />
+      </View>
+    );
+  };
+}
+
 export default function MainTabNavigator() {
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: colors.secondary,
+        tabBarActiveTintColor: TAB_ACTIVE,
         tabBarInactiveTintColor: colors.outlineVariant,
         tabBarStyle: {
-          backgroundColor: 'rgba(255, 255, 255, 0.92)',
-          borderTopLeftRadius: 16,
-          borderTopRightRadius: 16,
+          backgroundColor: '#FFFFFF',
+          borderTopLeftRadius: 20,
+          borderTopRightRadius: 20,
           borderTopWidth: 0,
-          elevation: 8,
+          elevation: 12,
           shadowColor: '#2b3437',
-          shadowOffset: { width: 0, height: -4 },
-          shadowOpacity: 0.06,
-          shadowRadius: 16,
-          height: Platform.OS === 'ios' ? 88 : 64,
-          paddingTop: 8,
-          paddingBottom: Platform.OS === 'ios' ? 28 : 10,
+          shadowOffset: { width: 0, height: -6 },
+          shadowOpacity: 0.08,
+          shadowRadius: 20,
+          height: Platform.OS === 'ios' ? 88 : 68,
+          paddingTop: 10,
+          paddingBottom: Platform.OS === 'ios' ? 28 : 12,
         },
         tabBarLabelStyle: {
-          fontFamily: 'Inter_500Medium',
-          fontSize: 11,
-          fontWeight: '500',
-          textTransform: 'uppercase',
-          letterSpacing: 1.2,
-          marginTop: 2,
+          fontFamily: 'Inter_600SemiBold',
+          fontSize: 12,
+          fontWeight: '600',
+          letterSpacing: 0.2,
+          marginTop: 0,
+          marginBottom: 4,
         },
         tabBarItemStyle: {
-          paddingTop: 4,
+          paddingTop: 0,
         },
       }}
     >
@@ -48,9 +69,7 @@ export default function MainTabNavigator() {
         component={DashboardScreen}
         options={{
           title: 'Dashboard',
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="dashboard" size={size} color={color} />
-          ),
+          tabBarIcon: tabBarIconFactory('dashboard'),
         }}
       />
       <Tab.Screen
@@ -58,9 +77,7 @@ export default function MainTabNavigator() {
         component={ProfileScreen}
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="person" size={size} color={color} />
-          ),
+          tabBarIcon: tabBarIconFactory('person'),
         }}
       />
     </Tab.Navigator>

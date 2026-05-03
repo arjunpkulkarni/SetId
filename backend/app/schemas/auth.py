@@ -3,7 +3,10 @@ from datetime import datetime
 
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator
+
+# Default display name when Apple does not share the user's name (most logins).
+APPLE_PLACEHOLDER_FULL_NAME = "Apple User"
 
 
 class SignupRequest(BaseModel):
@@ -23,9 +26,17 @@ class UserBrief(BaseModel):
     full_name: str
     avatar_url: str | None = None
     phone: str | None = None
+    auth_provider: str = "email"
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @computed_field
+    @property
+    def needs_display_name(self) -> bool:
+        """True when the user still has the generic Apple placeholder and should pick a real name."""
+        ap = (self.auth_provider or "").lower()
+        return ap == "apple" and (self.full_name or "").strip() == APPLE_PLACEHOLDER_FULL_NAME
 
 
 class SendOtpRequest(BaseModel):

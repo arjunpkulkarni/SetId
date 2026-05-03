@@ -18,6 +18,11 @@ function roundMoney(n) {
 }
 
 export function MembersSummary({ members, serverAssignments, bill }) {
+  const hostUserId = bill?.owner_id != null ? String(bill.owner_id) : null;
+  const partyNRaw = bill?.expected_party_size;
+  const partyN =
+    partyNRaw != null && Number.isFinite(Number(partyNRaw)) ? Math.max(0, Number(partyNRaw)) : null;
+
   // Sum amount_owed from backend assignments per member
   const allItemsSubtotal = serverAssignments.reduce(
     (s, a) => s + parsePriceValue(a.amount_owed), 0,
@@ -29,6 +34,8 @@ export function MembersSummary({ members, serverAssignments, bill }) {
     : 0;
 
   const memberTotals = members.map((m) => {
+    const isHost = hostUserId != null && m.user_id != null && String(m.user_id) === hostUserId;
+
     const mAssignments = serverAssignments.filter(
       (a) => String(a.bill_member_id) === String(m.id),
     );
@@ -37,8 +44,20 @@ export function MembersSummary({ members, serverAssignments, bill }) {
     );
     const itemCount = mAssignments.length;
     const proportion = billSubtotal > 0 ? subtotal / billSubtotal : 0;
-    const taxShare = billTax * proportion;
-    const tipShare = billTip * proportion;
+
+    let taxShare;
+    let tipShare;
+    if (isHost) {
+      taxShare = 0;
+      tipShare = 0;
+    } else if (partyN && partyN > 0) {
+      taxShare = billTax / partyN;
+      tipShare = billTip * proportion;
+    } else {
+      taxShare = billTax * proportion;
+      tipShare = billTip * proportion;
+    }
+
     const overheadShare = taxShare + tipShare;
     const total = roundMoney(subtotal + overheadShare);
     return { ...m, subtotal: roundMoney(subtotal), overheadShare: roundMoney(overheadShare), total, itemCount };

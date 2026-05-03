@@ -352,6 +352,13 @@ class CalculationService:
         bill_tax = bill.tax or Decimal("0")
         bill_tip = bill.tip or Decimal("0")
         tip_split_mode = bill.tip_split_mode or "proportional"
+        party_n = getattr(bill, "expected_party_size", None)
+        use_equal_tax = party_n is not None and int(party_n) > 0
+        per_guest_tax = Decimal("0")
+        if use_equal_tax:
+            per_guest_tax = (bill_tax / Decimal(int(party_n))).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
 
         bill_fee = bill.service_fee or Decimal("0")
         if bill_fee == Decimal("0") and bill_subtotal > 0:
@@ -405,9 +412,14 @@ class CalculationService:
             else:
                 proportion = Decimal("0")
 
-            tax_share = (proportion * bill_tax).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
+            if is_host:
+                tax_share = Decimal("0.00")
+            elif use_equal_tax:
+                tax_share = per_guest_tax
+            else:
+                tax_share = (proportion * bill_tax).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
             if tip_split_mode == "proportional":
                 tip_share = (proportion * bill_tip).quantize(
                     Decimal("0.01"), rounding=ROUND_HALF_UP

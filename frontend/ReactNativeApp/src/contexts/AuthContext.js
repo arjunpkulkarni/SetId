@@ -16,7 +16,8 @@ export function AuthProvider({ children }) {
     const body = await authApi.getMe();
     const data = unwrap(body);
     setUser(data);
-    setNeedsOnboarding(false);
+    // Apple Sign In often leaves a placeholder name until onboarding completes.
+    setNeedsOnboarding(!!data.needs_display_name);
     return data;
   }, []);
 
@@ -65,7 +66,7 @@ export function AuthProvider({ children }) {
     setTokenState(token);
     if (data.user) {
       setUser(data.user);
-      setNeedsOnboarding(false);
+      setNeedsOnboarding(!!data.needs_profile);
       return data.user;
     }
     try {
@@ -90,7 +91,7 @@ export function AuthProvider({ children }) {
     setTokenState(accessToken);
     if (data.user) {
       setUser(data.user);
-      setNeedsOnboarding(false);
+      setNeedsOnboarding(!!data.needs_profile);
       return data.user;
     }
     try {
@@ -110,7 +111,7 @@ export function AuthProvider({ children }) {
     const body = await authApi.createProfile(fullName);
     const data = unwrap(body);
     setUser(data);
-    setNeedsOnboarding(false);
+    setNeedsOnboarding(!!data.needs_display_name);
     setPendingOnboardingName('');
     return data;
   }, []);

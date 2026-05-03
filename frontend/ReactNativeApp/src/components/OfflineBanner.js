@@ -1,8 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated, Platform } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors } from '../theme';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 
 /**
@@ -45,8 +43,7 @@ export default function OfflineBanner() {
       ]}
     >
       <View style={styles.content}>
-        <MaterialIcons name="cloud-off" size={16} color={colors.onError} />
-        <Text style={styles.text}>You're offline — showing cached data</Text>
+        <Text style={styles.text}>☁️  You're offline — showing cached data</Text>
       </View>
     </Animated.View>
   );
@@ -59,17 +56,17 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 1000,
-    backgroundColor: colors.error,
+    backgroundColor: '#E0F2F1',
     paddingBottom: 10,
     paddingHorizontal: 16,
     ...Platform.select({
       ios: {
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
+        shadowOpacity: 0.06,
         shadowRadius: 4,
       },
-      android: { elevation: 4 },
+      android: { elevation: 3 },
     }),
   },
   content: {
@@ -82,6 +79,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
     fontWeight: '600',
-    color: colors.onError,
+    color: '#004D40',
   },
 });

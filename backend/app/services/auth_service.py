@@ -6,9 +6,8 @@ from app.core.security import create_access_token, hash_password, verify_passwor
 from app.models.user import User
 from app.services.apple_auth_service import AppleAuthService
 from app.services.otp_service import OtpProviderError, verify_otp as verify_otp_code
+from app.schemas.auth import APPLE_PLACEHOLDER_FULL_NAME
 from app.utils.phone import normalize_to_e164
-
-
 def _synthetic_email_from_phone(e164: str) -> str:
     digits = "".join(c for c in e164 if c.isdigit())
     return f"{digits}@phone.users.spltr"
@@ -95,7 +94,7 @@ class AuthService:
                 raise ValueError("Email is required for new user registration")
             
             # Extract name from user_info (first-time sign in only)
-            full_name = "Apple User"  # Default
+            full_name = APPLE_PLACEHOLDER_FULL_NAME  # Default
             if user_info and "name" in user_info:
                 name_data = user_info["name"]
                 first_name = name_data.get("firstName", "")
