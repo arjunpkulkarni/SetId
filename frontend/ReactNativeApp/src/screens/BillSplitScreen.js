@@ -11,6 +11,10 @@ import {
   RefreshControl,
   Modal,
   TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  Keyboard,
+  InputAccessoryView,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -79,6 +83,9 @@ function normalizeItemName(value) {
 function isDraftItemId(itemId) {
   return `${itemId}`.startsWith('draft-item-');
 }
+
+/** iOS decimal pad has no "Done" key — accessory bar dismisses keyboard. */
+const TIP_AMOUNT_INPUT_ACCESSORY_ID = 'settldTipAmountAccessory';
 
 // ─── Utility functions ──────────────────────────────────────────────────────────
 
@@ -466,6 +473,7 @@ export default function BillSplitScreen({ navigation, route }) {
       return;
     }
 
+    Keyboard.dismiss();
     setSavingTip(true);
     try {
       await billsApi.update(billId, {
@@ -754,73 +762,106 @@ export default function BillSplitScreen({ navigation, route }) {
         visible={showTipConfirm}
         animationType="fade"
         transparent
-        onRequestClose={() => {}}
+        onRequestClose={() => Keyboard.dismiss()}
       >
-        <View style={styles.tipModalBackdrop}>
-          <View style={styles.tipModalCard}>
-            <View style={styles.tipModalIcon}>
-              <MaterialIcons name="payments" size={24} color={colors.onSecondaryContainer} />
-            </View>
-            <Text style={styles.tipModalTitle}>
-              {detectedTip > 0 ? `Tip detected: ${formatCurrency(detectedTip)}` : 'Was tip paid?'}
-            </Text>
-            <Text style={styles.tipModalSubtitle}>
-              Confirm this now so guests know exactly what they are covering.
-            </Text>
-
-            <View style={styles.tipOptions}>
-              {tipOptions.map((option) => {
-                const selected = tipMode === option.mode;
-                return (
-                  <TouchableOpacity
-                    key={option.mode}
-                    activeOpacity={0.85}
-                    onPress={() => {
-                      setTipMode(option.mode);
-                      if (option.mode === 'no_tip') setTipInput('0.00');
-                    }}
-                    style={[styles.tipOption, selected && styles.tipOptionSelected]}
-                  >
-                    <View style={[styles.tipOptionRadio, selected && styles.tipOptionRadioSelected]}>
-                      {selected && <View style={styles.tipOptionRadioDot} />}
-                    </View>
-                    <View style={styles.tipOptionCopy}>
-                      <Text style={styles.tipOptionLabel}>{option.label}</Text>
-                      <Text style={styles.tipOptionHelper}>{option.helper}</Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {tipMode && tipMode !== 'no_tip' && (
-              <View style={styles.tipAmountWrap}>
-                <Text style={styles.tipAmountLabel}>Tip amount</Text>
-                <TextInput
-                  value={tipInput}
-                  onChangeText={(value) => setTipInput(cleanMoneyText(value))}
-                  keyboardType="decimal-pad"
-                  placeholder="0.00"
-                  placeholderTextColor={colors.outline}
-                  style={styles.tipAmountInput}
-                />
+        <KeyboardAvoidingView
+          style={styles.tipModalKeyboardRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        >
+          {Platform.OS === 'ios' && (
+            <InputAccessoryView nativeID={TIP_AMOUNT_INPUT_ACCESSORY_ID}>
+              <View style={styles.tipInputAccessory}>
+                <TouchableOpacity
+                  onPress={() => Keyboard.dismiss()}
+                  style={styles.tipInputAccessoryBtn}
+                  hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
+                >
+                  <Text style={styles.tipInputAccessoryBtnText}>Done</Text>
+                </TouchableOpacity>
               </View>
-            )}
-
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={handleConfirmTip}
-              disabled={savingTip}
-              style={[styles.tipConfirmButton, savingTip && styles.headerButtonDisabled]}
+            </InputAccessoryView>
+          )}
+          <View style={styles.tipModalBackdrop}>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+              contentContainerStyle={[
+                styles.tipModalScrollContent,
+                { paddingBottom: Math.max(insets.bottom, 40) },
+              ]}
             >
-              {savingTip ? (
-                <ActivityIndicator size="small" color={colors.onSecondary} />
-              ) : (
-                <Text style={styles.tipConfirmButtonText}>Confirm tip</Text>
-              )}
-            </TouchableOpacity>
+              <View style={styles.tipModalCard}>
+                <View style={styles.tipModalIcon}>
+                  <MaterialIcons name="payments" size={24} color={colors.onSecondaryContainer} />
+                </View>
+                <Text style={styles.tipModalTitle}>
+                  {detectedTip > 0 ? `Tip detected: ${formatCurrency(detectedTip)}` : 'Was tip paid?'}
+                </Text>
+                <Text style={styles.tipModalSubtitle}>
+                  Confirm this now so guests know exactly what they are covering.
+                </Text>
+
+                <View style={styles.tipOptions}>
+                  {tipOptions.map((option) => {
+                    const selected = tipMode === option.mode;
+                    return (
+                      <TouchableOpacity
+                        key={option.mode}
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          setTipMode(option.mode);
+                          if (option.mode === 'no_tip') setTipInput('0.00');
+                        }}
+                        style={[styles.tipOption, selected && styles.tipOptionSelected]}
+                      >
+                        <View style={[styles.tipOptionRadio, selected && styles.tipOptionRadioSelected]}>
+                          {selected && <View style={styles.tipOptionRadioDot} />}
+                        </View>
+                        <View style={styles.tipOptionCopy}>
+                          <Text style={styles.tipOptionLabel}>{option.label}</Text>
+                          <Text style={styles.tipOptionHelper}>{option.helper}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {tipMode && tipMode !== 'no_tip' && (
+                  <View style={styles.tipAmountWrap}>
+                    <Text style={styles.tipAmountLabel}>Tip amount</Text>
+                    <TextInput
+                      value={tipInput}
+                      onChangeText={(value) => setTipInput(cleanMoneyText(value))}
+                      keyboardType="decimal-pad"
+                      inputAccessoryViewID={
+                        Platform.OS === 'ios' ? TIP_AMOUNT_INPUT_ACCESSORY_ID : undefined
+                      }
+                      placeholder="0.00"
+                      placeholderTextColor={colors.outline}
+                      style={styles.tipAmountInput}
+                    />
+                  </View>
+                )}
+
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={handleConfirmTip}
+                  disabled={savingTip}
+                  style={[styles.tipConfirmButton, savingTip && styles.headerButtonDisabled]}
+                >
+                  {savingTip ? (
+                    <ActivityIndicator size="small" color={colors.onSecondary} />
+                  ) : (
+                    <Text style={styles.tipConfirmButtonText}>Confirm tip</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -915,11 +956,38 @@ const styles = StyleSheet.create({
     color: colors.onSecondary,
   },
 
+  tipModalKeyboardRoot: {
+    flex: 1,
+  },
   tipModalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.42)',
+  },
+  tipModalScrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
     paddingHorizontal: 20,
+    paddingVertical: 32,
+  },
+  tipInputAccessory: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceContainerLow,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.outlineVariant,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  tipInputAccessoryBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  tipInputAccessoryBtnText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.secondary,
   },
   tipModalCard: {
     backgroundColor: colors.surfaceContainerLowest,
