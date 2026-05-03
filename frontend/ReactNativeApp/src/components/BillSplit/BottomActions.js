@@ -9,24 +9,23 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, radii, shadows } from '../../theme';
+import {
+  computeMemberMoneyBreakdown,
+  parsePriceValue,
+  resolveHostUserId,
+  resolvePartyN,
+  roundMoney,
+} from './memberMoneyBreakdown';
 
 function formatCurrency(value) {
   const num = typeof value === 'string' ? parseFloat(value) : (value ?? 0);
   return `$${Math.abs(num).toFixed(2)}`;
 }
 
-function parsePriceValue(value) {
-  const num = typeof value === 'string' ? parseFloat(value) : (value ?? 0);
-  return Number.isFinite(num) ? num : 0;
-}
-
-function roundMoney(n) {
-  return Math.round(n * 100) / 100;
-}
-
 /**
- * Sticky footer: assigned line items + items subtotal, tax / tip (tip only when
- * bill has proportional tip > 0), and total — before host taps Next.
+ * Sticky footer on assign-items: shows the host’s own line items + subtotal +
+ * tax/tip/total only for the host (same math as MembersSummary). Full bill +
+ * collection live on Review Payment (next step).
  */
 export function BottomActions({
   insets,
@@ -34,24 +33,73 @@ export function BottomActions({
   assignmentMap,
   serverAssignments,
   bill,
+  members,
   onSend,
   isHost,
 }) {
   const totalLines = items.length;
   const assignedLines = items.filter((i) => (assignmentMap[i.id] || []).length > 0).length;
 
-  const assignedSubtotal = serverAssignments.reduce(
-    (s, a) => s + parsePriceValue(a.amount_owed),
-    0,
-  );
+  const hostUserId = resolveHostUserId(bill);
+  const partyN = resolvePartyN(bill);
+  const hostMember = useMemo(() => {
+    if (!hostUserId || !members?.length) return null;
+    return members.find((m) => m.user_id != null && String(m.user_id) === hostUserId) ?? null;
+  }, [hostUserId, members]);
 
   const breakdown = useMemo(() => {
+    if (isHost && hostMember) {
+      const mine = computeMemberMoneyBreakdown(hostMember, {
+        serverAssignments,
+        bill,
+        hostUserId,
+        partyN,
+      });
+      const hostIdStr = String(hostMember.id);
+
+      const itemRows = items
+        .filter((item) =>
+          serverAssignments.some(
+            (a) =>
+              String(a.receipt_item_id) === String(item.id) &&
+              String(a.bill_member_id) === hostIdStr,
+          ),
+        )
+        .map((item) => {
+          const lineTotal = serverAssignments
+            .filter(
+              (a) =>
+                String(a.receipt_item_id) === String(item.id) &&
+                String(a.bill_member_id) === hostIdStr,
+            )
+            .reduce((s, a) => s + parsePriceValue(a.amount_owed), 0);
+          return {
+            id: item.id,
+            name: item.name || 'Item',
+            amount: roundMoney(lineTotal),
+          };
+        })
+        .filter((row) => row.amount > 0);
+
+      return {
+        itemRows,
+        subtotal: mine.subtotal,
+        taxShare: mine.taxShare,
+        tipShare: mine.tipShare,
+        total: mine.total,
+        mode: 'host',
+      };
+    }
+
+    // Legacy: guest or missing host mapping — keep prior aggregate behavior
+    const assignedSubtotal = serverAssignments.reduce(
+      (s, a) => s + parsePriceValue(a.amount_owed),
+      0,
+    );
     const billSubtotal = parsePriceValue(bill?.subtotal ?? assignedSubtotal);
     const billTax = parsePriceValue(bill?.tax ?? 0);
     const billTip =
-      bill?.tip_split_mode === 'proportional'
-        ? parsePriceValue(bill?.tip ?? 0)
-        : 0;
+      bill?.tip_split_mode === 'proportional' ? parsePriceValue(bill?.tip ?? 0) : 0;
     const proportion =
       billSubtotal > 0 ? Math.min(1, assignedSubtotal / billSubtotal) : 0;
     const taxShare = roundMoney(billTax * proportion);
@@ -74,15 +122,29 @@ export function BottomActions({
 
     return {
       itemRows,
+      subtotal: assignedSubtotal,
       taxShare,
       tipShare,
       total,
+      mode: 'aggregate',
     };
-  }, [bill, items, assignmentMap, serverAssignments, assignedSubtotal]);
+  }, [
+    isHost,
+    hostMember,
+    bill,
+    items,
+    assignmentMap,
+    serverAssignments,
+    hostUserId,
+    partyN,
+  ]);
 
-  const { itemRows, taxShare, tipShare, total } = breakdown;
+  const { itemRows, subtotal, taxShare, tipShare, total, mode } = breakdown;
   const showTax = taxShare > 0;
   const showTip = tipShare > 0;
+  const subtotalLabel =
+    mode === 'host' ? 'Subtotal (your items)' : 'Subtotal (items)';
+  const totalLabel = mode === 'host' ? 'Your total' : 'Total';
 
   return (
     <View style={[styles.bottomActions, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
@@ -106,29 +168,33 @@ export function BottomActions({
             </View>
           ))}
         </ScrollView>
+      ) : mode === 'host' ? (
+        <Text style={styles.hostOnlyHint}>
+          Nothing assigned to you yet — your total is $0.00 until you add yourself to items.
+        </Text>
       ) : null}
 
       <View style={styles.divider} />
 
       <View style={styles.breakdownRow}>
-        <Text style={styles.breakdownLabel}>Subtotal (items)</Text>
-        <Text style={styles.breakdownValue}>{formatCurrency(assignedSubtotal)}</Text>
+        <Text style={styles.breakdownLabel}>{subtotalLabel}</Text>
+        <Text style={styles.breakdownValue}>{formatCurrency(subtotal)}</Text>
       </View>
       {showTax ? (
         <View style={styles.breakdownRow}>
-          <Text style={styles.breakdownLabel}>Tax (assigned share)</Text>
+          <Text style={styles.breakdownLabel}>Tax</Text>
           <Text style={styles.breakdownValue}>{formatCurrency(taxShare)}</Text>
         </View>
       ) : null}
       {showTip ? (
         <View style={styles.breakdownRow}>
-          <Text style={styles.breakdownLabel}>Tip (assigned share)</Text>
+          <Text style={styles.breakdownLabel}>Tip (your share)</Text>
           <Text style={styles.breakdownValue}>{formatCurrency(tipShare)}</Text>
         </View>
       ) : null}
 
       <View style={styles.totalRow}>
-        <Text style={styles.totalLabel}>Total</Text>
+        <Text style={styles.totalLabel}>{totalLabel}</Text>
         <Text style={styles.totalAmount}>{formatCurrency(total)}</Text>
       </View>
 
@@ -171,6 +237,13 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: colors.onSurfaceVariant,
     marginBottom: 8,
+  },
+  hostOnlyHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+    marginBottom: 8,
+    lineHeight: 16,
   },
   itemsScroll: {
     maxHeight: 140,

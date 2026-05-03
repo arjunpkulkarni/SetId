@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, TextInput, StyleSheet } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, radii } from '../../theme';
+import { equalSplitAmountFromServer } from './memberMoneyBreakdown';
 import { MemberChip } from './MemberChip';
 import { QuantityEditor } from './QuantityEditor';
 
@@ -29,12 +30,19 @@ export function BillItemCard({
   onDecrementQuantity,
   onIncrementQuantity,
   onRemoveItem,
+  serverAssignments,
 }) {
   const isUnassigned = assignedMemberIds.length === 0;
   const isZeroQuantity = isEditingItems && quantity === 0;
   const totalPrice = parsePriceValue(price ?? item.total_price);
   const isShared = assignedMemberIds.length > 1;
-  const perPersonPrice = isShared ? totalPrice / assignedMemberIds.length : totalPrice;
+  const serverEqualShare =
+    !isEditingItems && isShared
+      ? equalSplitAmountFromServer(item.id, assignedMemberIds, serverAssignments ?? [])
+      : null;
+  const perPersonPrice = isShared
+    ? (serverEqualShare != null ? serverEqualShare : totalPrice / assignedMemberIds.length)
+    : totalPrice;
 
   return (
     <View

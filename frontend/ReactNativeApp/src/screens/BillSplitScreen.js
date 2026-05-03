@@ -744,6 +744,7 @@ export default function BillSplitScreen({ navigation, route }) {
                   onDecrementQuantity={() => handleDecrementQuantity(item.id)}
                   onIncrementQuantity={() => handleIncrementQuantity(item.id)}
                   onRemoveItem={() => handleRemoveItem(item.id)}
+                  serverAssignments={serverAssignments}
                 />
               ))}
             </View>
@@ -766,6 +767,7 @@ export default function BillSplitScreen({ navigation, route }) {
           assignmentMap={assignmentMap}
           serverAssignments={serverAssignments}
           bill={bill}
+          members={members}
           onSend={handleSend}
           isHost={true}
         />
