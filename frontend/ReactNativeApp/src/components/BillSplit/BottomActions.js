@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, radii, shadows } from '../../theme';
 import {
@@ -39,6 +40,7 @@ export function BottomActions({
   onSend,
   isHost,
 }) {
+  const [lineItemsOpen, setLineItemsOpen] = useState(true);
   const totalLines = items.length;
   const assignedLines = items.filter((i) => (assignmentMap[i.id] || []).length > 0).length;
 
@@ -148,6 +150,8 @@ export function BottomActions({
   const subtotalLabel =
     mode === 'host' ? 'Subtotal (your items)' : 'Subtotal (items)';
   const totalLabel = mode === 'host' ? 'Your total' : 'Total';
+  const lineItemsLabel =
+    mode === 'host' ? `Your items (${itemRows.length})` : `Line items (${itemRows.length})`;
 
   return (
     <View style={[styles.bottomActions, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
@@ -156,21 +160,40 @@ export function BottomActions({
       </Text>
 
       {itemRows.length > 0 ? (
-        <ScrollView
-          style={styles.itemsScroll}
-          nestedScrollEnabled
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={itemRows.length > 4}
-        >
-          {itemRows.map((row) => (
-            <View key={String(row.id)} style={styles.lineRow}>
-              <Text style={styles.lineName} numberOfLines={2}>
-                {row.name}
-              </Text>
-              <Text style={styles.lineAmount}>{formatCurrency(row.amount)}</Text>
-            </View>
-          ))}
-        </ScrollView>
+        <>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.itemsToggleRow}
+            onPress={() => setLineItemsOpen((v) => !v)}
+            accessibilityRole="button"
+            accessibilityLabel={lineItemsOpen ? 'Hide item breakdown' : 'Show item breakdown'}
+            accessibilityState={{ expanded: lineItemsOpen }}
+          >
+            <Text style={styles.itemsToggleLabel}>{lineItemsLabel}</Text>
+            <MaterialIcons
+              name={lineItemsOpen ? 'expand-less' : 'expand-more'}
+              size={24}
+              color={colors.onSurfaceVariant}
+            />
+          </TouchableOpacity>
+          {lineItemsOpen ? (
+            <ScrollView
+              style={styles.itemsScroll}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={itemRows.length > 4}
+            >
+              {itemRows.map((row) => (
+                <View key={String(row.id)} style={styles.lineRow}>
+                  <Text style={styles.lineName} numberOfLines={2}>
+                    {row.name}
+                  </Text>
+                  <Text style={styles.lineAmount}>{formatCurrency(row.amount)}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          ) : null}
+        </>
       ) : mode === 'host' ? (
         <Text style={styles.hostOnlyHint}>
           Nothing assigned to you yet — your total is $0.00 until you add yourself to items.
@@ -247,6 +270,19 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     marginBottom: 8,
     lineHeight: 16,
+  },
+  itemsToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+    paddingVertical: 4,
+  },
+  itemsToggleLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.onSurface,
   },
   itemsScroll: {
     maxHeight: 140,

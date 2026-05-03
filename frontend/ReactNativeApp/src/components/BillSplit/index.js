@@ -6,3 +6,4 @@ export { BillItemCard } from './BillItemCard';
 export { MembersSummary } from './MembersSummary';
 export { EmptyItems } from './EmptyItems';
 export { BottomActions } from './BottomActions';
+export { TipAndPartyInline } from './TipAndPartyInline';
