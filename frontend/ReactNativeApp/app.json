@@ -3,7 +3,7 @@
     "name": "Settld - Bill Split",
     "slug": "settld",
     "owner": "arjunpkulkarni",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -15,7 +15,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.culinAILLC.settld",
-      "buildNumber": "5",
+      "buildNumber": "2",
       "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false

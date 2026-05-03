@@ -1,7 +1,7 @@
 """add expected_party_size to bills
 
 Revision ID: 3a5b7c9d0e12
-Revises: 2f4b6c8d9e10
+Revises: b3e4f5a6c7d8
 Create Date: 2026-05-02 12:00:00.000000
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 
 
 revision: str = "3a5b7c9d0e12"
-down_revision: Union[str, None] = "2f4b6c8d9e10"
+down_revision: Union[str, None] = "b3e4f5a6c7d8"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
