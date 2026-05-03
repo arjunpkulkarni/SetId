@@ -168,6 +168,14 @@ def validate_parsed_receipt(
     elif abs(_quantize(subtotal_dec + tax_dec + tip_dec) - total_dec) > TOLERANCE:
         warnings.append("Mismatch between total and computed sum")
 
+    # Model often invents a small tip or mislabels a surcharge as gratuity. If the
+    # printed total equals subtotal + tax only, there is no room for tip on the receipt.
+    if total_dec is not None and subtotal_dec is not None and tip_dec > 0:
+        sum_without_tip = _quantize(subtotal_dec + tax_dec)
+        if abs(total_dec - sum_without_tip) <= TOLERANCE:
+            tip_dec = Decimal("0.00")
+            warnings.append("Tip omitted; receipt total matches subtotal plus tax only")
+
     overall_confidence = 0.0
     if normalized_items:
         avg_item_confidence = sum(item["confidence"] for item in normalized_items) / len(normalized_items)

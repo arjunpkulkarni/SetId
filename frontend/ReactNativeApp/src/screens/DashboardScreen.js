@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useStore } from 'react-redux';
 import {
   View,
   Text,
@@ -24,9 +24,13 @@ import { colors, radii, shadows, spacing } from '../theme';
 import { useAuth } from '../contexts/AuthContext';
 import { bills } from '../services/api';
 import {
+  api,
   useGetDashboardQuery,
   hydrateDashboardFromCache,
+  DASHBOARD_CACHE_KEY,
+  DASHBOARD_CACHE_TTL,
 } from '../store/api';
+import { offlineStorage } from '../services/offlineStorage';
 import LazyImage from '../components/LazyImage';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -520,6 +524,7 @@ export default function DashboardScreen({ navigation }) {
   const tabBarHeight = useBottomTabBarHeight();
   const { user } = useAuth();
   const dispatch = useDispatch();
+  const store = useStore();
 
   // Hydrate the RTK Query cache from AsyncStorage once per mount. This
   // runs synchronously (via `upsertQueryData`) the moment the disk read
@@ -615,15 +620,36 @@ export default function DashboardScreen({ navigation }) {
   const handleDeleteBill = useCallback(
     async (bill) => {
       if (!bill?.id) return;
+      const idStr = String(bill.id);
+      const selectDashboard = api.endpoints.getDashboard.select(undefined);
+      const prevEntry = selectDashboard(store.getState());
+      const prevData = prevEntry?.data;
+
+      const applyList = (list) =>
+        (list ?? []).filter((b) => String(b.id) !== idStr);
+
+      if (prevData?.activeBills) {
+        const nextData = {
+          ...prevData,
+          activeBills: applyList(prevData.activeBills),
+        };
+        dispatch(api.util.upsertQueryData('getDashboard', undefined, nextData));
+        offlineStorage.set(DASHBOARD_CACHE_KEY, nextData, DASHBOARD_CACHE_TTL).catch(() => {});
+      }
+
       try {
         await bills.delete(bill.id);
-      } finally {
-        // Always refetch — the server is the source of truth. If the
-        // delete failed the bill simply reappears, which is the right UX.
-        await refetchDashboard();
+      } catch (err) {
+        if (prevData) {
+          dispatch(api.util.upsertQueryData('getDashboard', undefined, prevData));
+          offlineStorage.set(DASHBOARD_CACHE_KEY, prevData, DASHBOARD_CACHE_TTL).catch(() => {});
+        }
+        throw err;
       }
+      // Reconcile with server without blocking the UI (delete already succeeded).
+      void refetchDashboard();
     },
-    [refetchDashboard],
+    [dispatch, store, refetchDashboard],
   );
 
   const handleCreateBillFromReceipt = useCallback(async () => {

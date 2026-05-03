@@ -54,6 +54,30 @@ def test_validator_derives_subtotal_and_total():
     assert out["total"] == Decimal("10.50")
 
 
+def test_validator_clears_spurious_tip_when_total_matches_subtotal_plus_tax_only():
+    """LLM sometimes emits tip=1.00 though the receipt total is only subtotal + tax."""
+    items = [
+        {
+            "name": "Burger",
+            "quantity": Decimal("1"),
+            "unit_price": Decimal("10.00"),
+            "total_price": Decimal("10.00"),
+            "modifiers": [],
+        },
+    ]
+    out = validate_parsed_receipt(
+        items=items,
+        subtotal=Decimal("10.00"),
+        tax=Decimal("0.99"),
+        total=Decimal("10.99"),
+        tip=Decimal("1.00"),
+        llm_confidence=Decimal("0.9"),
+        rows=[],
+    )
+    assert out["tip"] == Decimal("0.00")
+    assert "Tip omitted" in " ".join(out["warnings"])
+
+
 def test_merge_intermediate_concatenates_and_dedupes():
     a = {
         "items": [

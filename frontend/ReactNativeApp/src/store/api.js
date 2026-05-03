@@ -6,12 +6,9 @@ import { offlineStorage } from '../services/offlineStorage';
 /** AsyncStorage key for the combined dashboard payload. Bumping this prefix
  *  forces every client to re-fetch (use if the server contract changes). */
 export const DASHBOARD_CACHE_KEY = 'dashboard_v1';
+/** TTL for persisted dashboard payload (exported for optimistic deletes). */
+export const DASHBOARD_CACHE_TTL = 24 * 60 * 60 * 1000;
 /** Accept a cached payload up to 24h old on cold open — RTK Query refetches
- *  in the background anyway, so showing slightly stale numbers for 200ms
- *  is strictly better than a blank screen. */
-const DASHBOARD_CACHE_TTL = 24 * 60 * 60 * 1000;
-
-/**
  * RTK Query API slice — the cache, deduplication, and revalidation story.
  *
  * Why: the manual useState+useEffect+useRef dance in BillSplitScreen was

@@ -140,7 +140,9 @@ entirely:
   - total, grand total, net total, running total, total due
   - balance due, amount due, amount owed, amt due, pay this amount, to pay, please pay, charge
   - tax, sales tax, vat, gst, hst
-  - tip, gratuity, service charge, service fee (map explicit customer-paid tip/gratuity to `tip`)
+  - tip, gratuity — map ONLY optional customer gratuity lines labeled tip/gratuity/add tip/suggested tip to `tip`.
+    Do NOT map mandatory service charges, kitchen fees, health mandates, SF surcharges, or generic "service fee"
+    lines to `tip` (leave `tip` null unless it is clearly a discretionary gratuity).
   - change, change due, cash, credit, debit, card, visa, mastercard, amex, discover
   - approval, auth, batch, trace, merchant id, terminal id
   - addresses, phone numbers, dates, timestamps, "thank you" messages, loyalty codes
