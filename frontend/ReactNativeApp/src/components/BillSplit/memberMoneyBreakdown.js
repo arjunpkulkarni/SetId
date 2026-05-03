@@ -18,6 +18,29 @@ export function resolvePartyN(bill) {
   return raw != null && Number.isFinite(Number(raw)) ? Math.max(0, Number(raw)) : null;
 }
 
+/** Bill subtotal for splits: trust API when > 0; else fall back to sum of assignments (subtotal `0` is valid-ish from API but breaks proportions). */
+export function effectiveBillSubtotal(bill, allAssignedSubtotal) {
+  const fromBill = parsePriceValue(bill?.subtotal);
+  if (fromBill > 0) return fromBill;
+  return allAssignedSubtotal > 0 ? allAssignedSubtotal : 0;
+}
+
+/**
+ * Use stored `bill.tax` when present; otherwise infer from
+ * `total - subtotal - tip - service_fee` when subtotal is known (covers stale/empty tax on the row).
+ */
+export function effectiveBillTax(bill, billSubtotalForResidual) {
+  let t = parsePriceValue(bill?.tax);
+  if (t > 0) return t;
+  if (!bill || billSubtotalForResidual <= 0) return 0;
+  const total = parsePriceValue(bill.total);
+  const tip = parsePriceValue(bill.tip ?? 0);
+  const fee = parsePriceValue(bill.service_fee ?? 0);
+  const implied = roundMoney(total - billSubtotalForResidual - tip - fee);
+  if (implied > 0.005 && implied < total) return implied;
+  return 0;
+}
+
 /**
  * @param {object} member — bill member with `id`, optional `user_id`
  * @param {object} opts
@@ -39,8 +62,11 @@ export function computeMemberMoneyBreakdown(member, { serverAssignments, bill, h
     (s, a) => s + parsePriceValue(a.amount_owed),
     0,
   );
-  const billSubtotal = parsePriceValue(bill?.subtotal ?? allItemsSubtotal);
-  const billTax = parsePriceValue(bill?.tax ?? 0);
+  const billSubtotal = effectiveBillSubtotal(bill, allItemsSubtotal);
+  const subtotalForTaxResidual = parsePriceValue(bill?.subtotal) > 0
+    ? parsePriceValue(bill.subtotal)
+    : billSubtotal;
+  const billTax = effectiveBillTax(bill, subtotalForTaxResidual);
   const billTip =
     bill?.tip_split_mode === 'proportional' ? parsePriceValue(bill?.tip ?? 0) : 0;
 
@@ -49,8 +75,10 @@ export function computeMemberMoneyBreakdown(member, { serverAssignments, bill, h
   let taxShare;
   let tipShare;
   if (isHost) {
-    taxShare = 0;
-    tipShare = 0;
+    // Item-weighted share of tax/tip so host sees the same "your portion of the
+    // check" as on the receipt (collection logic on the server may differ).
+    taxShare = billTax * proportion;
+    tipShare = billTip * proportion;
   } else if (partyN && partyN > 0) {
     taxShare = billTax / partyN;
     tipShare = billTip * proportion;

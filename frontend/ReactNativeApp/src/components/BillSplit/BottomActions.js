@@ -11,6 +11,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { colors, radii, shadows } from '../../theme';
 import {
   computeMemberMoneyBreakdown,
+  effectiveBillSubtotal,
+  effectiveBillTax,
   parsePriceValue,
   resolveHostUserId,
   resolvePartyN,
@@ -96,8 +98,9 @@ export function BottomActions({
       (s, a) => s + parsePriceValue(a.amount_owed),
       0,
     );
-    const billSubtotal = parsePriceValue(bill?.subtotal ?? assignedSubtotal);
-    const billTax = parsePriceValue(bill?.tax ?? 0);
+    const billSubtotal = effectiveBillSubtotal(bill, assignedSubtotal);
+    const subForTax = parsePriceValue(bill?.subtotal) > 0 ? parsePriceValue(bill.subtotal) : billSubtotal;
+    const billTax = effectiveBillTax(bill, subForTax);
     const billTip =
       bill?.tip_split_mode === 'proportional' ? parsePriceValue(bill?.tip ?? 0) : 0;
     const proportion =
