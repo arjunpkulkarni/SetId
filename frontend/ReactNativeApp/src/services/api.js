@@ -391,36 +391,30 @@ export const virtualCards = {
 
 // ─── Stripe Connect (host payouts) ───────────────────────────────────────────
 // Host-side endpoints for Custom-account onboarding + automatic daily
-// payouts to a debit card. Nothing here is used by guests paying bills —
-// guests go through `paymentMethods` / the existing PaymentIntent flow.
+// payouts to a debit card or US bank account. Guests paying bills use
+// `paymentMethods` / PaymentIntents — not these routes.
 // There is no "cash out" endpoint: Stripe runs payouts automatically on
 // the account's daily schedule.
 export const stripeConnect = {
   /** Fetch current Connect account status. Returns: {
    *  connected, charges_enabled, payouts_enabled, details_submitted,
    *  has_instant_external_account, external_account_last4,
-   *  external_account_brand, requirements_due, disabled_reason }.
+   *  external_account_brand, external_account_type, requirements_due,
+   *  requirements_past_due, disabled_reason }.
    *  Safe to call even when the user has never onboarded — returns
    *  `connected: false`. */
   getStatus: () => client.get('/stripe/connect/status'),
 
-  /** Submit the in-app KYC form + tokenized debit card in one call.
-   *  Payload:
-   *    {
-   *      individual: { first_name, last_name, email, phone,
-   *                    dob_day, dob_month, dob_year,
-   *                    address_line1, address_city, address_state, address_postal_code,
-   *                    ssn_last_4 },
-   *      card_token: 'tok_xxx',  // from stripe.createToken on the client
-   *    }
-   *  Replaces the old `/onboard` → Stripe-hosted redirect flow. */
+  /** Submit KYC + exactly one of `card_token` or `bank_token` (`tok_...`). */
   setupPayouts: (payload) => client.post('/stripe/connect/setup', payload),
 
-  /** Swap the user's payout card without re-submitting identity info.
-   *  Used by the "Change payout method" flow after initial setup.
-   *  Payload: { card_token: 'tok_xxx' }. */
-  updatePayoutCard: ({ card_token }) =>
-    client.post('/stripe/connect/external-account', { card_token }),
+  /** Change payout destination: `{ card_token }` or `{ bank_token }`. */
+  updatePayoutMethod: (payload) =>
+    client.post('/stripe/connect/external-account', payload),
+
+  /** @deprecated use `updatePayoutMethod` */
+  updatePayoutCard: (payload) =>
+    client.post('/stripe/connect/external-account', payload),
 
   /** Pending-balance in cents — the amount that will go out in the next
    *  scheduled daily payout. Returns `{ available_cents, currency }`. */

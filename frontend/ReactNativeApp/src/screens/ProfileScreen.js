@@ -214,7 +214,7 @@ export default function ProfileScreen({ navigation }) {
                             : !connectStatus.payouts_enabled
                               ? 'Verification pending'
                               : connectStatus.external_account_last4
-                                ? `Active · ${connectStatus.external_account_brand ?? 'Card'} •• ${connectStatus.external_account_last4}`
+                                ? `Active · ${connectStatus.external_account_brand ?? (connectStatus.external_account_type === 'bank' ? 'Bank' : 'Card')} •• ${connectStatus.external_account_last4}`
                                 : 'Payouts active'}
                     </Text>
                   </View>

@@ -28,6 +28,8 @@ import {
   hydrateDashboardFromCache,
   DASHBOARD_CACHE_KEY,
   DASHBOARD_CACHE_TTL,
+  tombstoneDashboardBillDeletion,
+  clearDashboardBillTombstone,
 } from '../store/api';
 import { offlineStorage } from '../services/offlineStorage';
 import LazyImage from '../components/LazyImage';
@@ -702,6 +704,8 @@ export default function DashboardScreen({ navigation }) {
     async (bill) => {
       if (!bill?.id) return;
       const idStr = String(bill.id);
+      tombstoneDashboardBillDeletion(idStr);
+
       const selectDashboard = api.endpoints.getDashboard.select(undefined);
       const prevEntry = selectDashboard(store.getState());
       const prevData = prevEntry?.data;
@@ -721,6 +725,7 @@ export default function DashboardScreen({ navigation }) {
       try {
         await bills.delete(bill.id);
       } catch (err) {
+        clearDashboardBillTombstone(idStr);
         if (prevData) {
           dispatch(api.util.upsertQueryData('getDashboard', undefined, prevData));
           offlineStorage.set(DASHBOARD_CACHE_KEY, prevData, DASHBOARD_CACHE_TTL).catch(() => {});

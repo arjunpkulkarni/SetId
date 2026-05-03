@@ -622,7 +622,7 @@ export default function BillSplitScreen({ navigation, route }) {
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: insets.top + 72, paddingBottom: insets.bottom + 160 },
+          { paddingTop: insets.top + 72, paddingBottom: insets.bottom + 300 },
         ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -765,6 +765,7 @@ export default function BillSplitScreen({ navigation, route }) {
           items={visibleItems}
           assignmentMap={assignmentMap}
           serverAssignments={serverAssignments}
+          bill={bill}
           onSend={handleSend}
           isHost={true}
         />

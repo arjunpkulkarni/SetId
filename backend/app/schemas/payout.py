@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
 class PayoutOut(BaseModel):
@@ -37,6 +37,7 @@ class ConnectStatusOut(BaseModel):
     has_instant_external_account: bool
     external_account_last4: str | None = None
     external_account_brand: str | None = None
+    external_account_type: str | None = None
     requirements_due: list[str] = Field(default_factory=list)
     requirements_past_due: list[str] = Field(default_factory=list)
     disabled_reason: str | None = None
@@ -88,37 +89,48 @@ class PayoutsSetupIndividual(BaseModel):
 
 
 class ExternalAccountUpdateRequest(BaseModel):
-    """Body of `POST /stripe/connect/external-account` — the "change
-    card on file" flow. Expects only a card token; identity has already
-    been submitted during the initial payout-method setup.
-
-    `card_token` is a `tok_...` from the Stripe React Native SDK's
-    `createToken({ type: 'Card', currency: 'usd', ... })`. The raw card
-    number never leaves the phone.
+    """Body of `POST /stripe/connect/external-account` — change the payout
+    destination. Expects exactly one of `card_token` or `bank_token`.
     """
 
-    card_token: str = Field(..., min_length=1, max_length=100)
+    card_token: str | None = Field(default=None, max_length=100)
+    bank_token: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def _exactly_one_token(self):
+        c = (self.card_token or "").strip() or None
+        b = (self.bank_token or "").strip() or None
+        if bool(c) + bool(b) != 1:
+            raise ValueError(
+                "Provide exactly one of card_token or bank_token",
+            )
+        return self.model_copy(update={"card_token": c, "bank_token": b})
 
 
 class PayoutsSetupRequest(BaseModel):
     """Body of `POST /stripe/connect/setup`. Combines the in-app KYC
-    form with the client-tokenized debit card.
+    form with exactly one client token: debit card **or** US bank account.
 
-    `card_token` is a `tok_...` string returned by the Stripe React
-    Native SDK's `createToken({ type: 'Card', currency: 'usd', ... })`.
-    Attached as the external account on the host's Connect account.
+    `card_token` / `bank_token`: `tok_...` from the Stripe React Native SDK
+    (`createToken` with type Card or BankAccount).
 
-    `payment_method_id` is an optional `pm_...` for the SAME card,
-    created via `createPaymentMethod({ paymentMethodType: 'Card' })`.
-    When present, the server also attaches it to the user's Stripe
-    Customer so the same card works for paying bills — no redundant
-    second "add payment method" step.
-
-    The raw card number never leaves the phone.
+    `payment_method_id` is an optional `pm_...` for the same **card** only;
+    the server attaches it to the user's Customer for paying bills as a guest.
     """
 
     individual: PayoutsSetupIndividual
-    card_token: str = Field(..., min_length=1, max_length=100)
+    card_token: str | None = Field(default=None, max_length=100)
+    bank_token: str | None = Field(default=None, max_length=100)
     payment_method_id: str | None = Field(
         default=None, min_length=1, max_length=100
     )
+
+    @model_validator(mode="after")
+    def _exactly_one_payout_token(self):
+        c = (self.card_token or "").strip() or None
+        b = (self.bank_token or "").strip() or None
+        if bool(c) + bool(b) != 1:
+            raise ValueError(
+                "Provide exactly one of card_token or bank_token",
+            )
+        return self.model_copy(update={"card_token": c, "bank_token": b})

@@ -177,6 +177,7 @@ export default function PayoutsScreen({ navigation }) {
     navigation.navigate('UpdatePayoutCard', {
       currentBrand: status?.external_account_brand,
       currentLast4: status?.external_account_last4,
+      currentAccountType: status?.external_account_type,
       onUpdated: () => refreshAll(),
     });
   };
@@ -258,7 +259,7 @@ export default function PayoutsScreen({ navigation }) {
 
     const cardDesc =
       status.external_account_last4
-        ? `${status.external_account_brand ?? 'Card'} •• ${status.external_account_last4}`
+        ? `${status.external_account_brand ?? (status.external_account_type === 'bank' ? 'Bank' : 'Card')} •• ${status.external_account_last4}`
         : 'Payouts active';
 
     return (

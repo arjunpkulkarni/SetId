@@ -43,6 +43,7 @@ _STATUS_BY_CODE: dict[str, int] = {
     "IDENTITY_REJECTED": 400,
     "CARD_DECLINED": 402,
     "INVALID_CARD": 400,
+    "INVALID_BANK_ACCOUNT": 400,
     "STRIPE_ERROR": 502,
     "WEBHOOK_NOT_CONFIGURED": 503,
     "INVALID_SIGNATURE": 400,
@@ -89,6 +90,7 @@ def submit_payout_setup(
             current_user,
             individual=body.individual.model_dump(),
             card_token=body.card_token,
+            bank_token=body.bank_token,
             client_ip=client_ip,
             payment_method_id=body.payment_method_id,
         )
@@ -116,7 +118,9 @@ def update_external_account(
     try:
         svc = StripeConnectService(db)
         status_obj = svc.replace_external_account(
-            current_user, card_token=body.card_token
+            current_user,
+            card_token=body.card_token,
+            bank_token=body.bank_token,
         )
     except StripeConnectError as e:
         return _to_error(e)

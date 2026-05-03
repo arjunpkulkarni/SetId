@@ -1,6 +1,6 @@
 """
 Stripe Connect — Custom connected accounts + automatic daily payouts to
-debit cards.
+US debit cards or US bank accounts (ACH).
 
 This is the ONE place we talk to Stripe in the Connect context. Every call
 that touches a connected account passes `stripe_account=acct_id` so Stripe
@@ -15,7 +15,7 @@ Money flow this service enables:
                             `transfer_data.destination = host_acct_id`)
             └─▶ Host's Connect balance (`available`)
                 └─▶ Stripe's automatic daily payout runs on schedule
-                    └─▶ Host's debit card (arrives in 1–2 business days)
+                    └─▶ Host's debit card or bank account (ACH)
 
 We do NOT trigger payouts ourselves. The account's payout schedule is set
 to daily at account-creation time (see `ensure_connected_account`), so
@@ -56,6 +56,9 @@ class StripeConnectError(ValueError):
         self.message = message
 
 
+_ALLOWED_PAYOUT_TOKEN_FUNDING = frozenset({"debit", "prepaid"})
+
+
 @dataclass
 class ConnectedAccountStatus:
     connected: bool
@@ -68,6 +71,8 @@ class ConnectedAccountStatus:
     has_instant_external_account: bool
     external_account_last4: Optional[str]
     external_account_brand: Optional[str]
+    # "card" | "bank" — disambiguates `external_account_brand` in the UI.
+    external_account_type: Optional[str]
     # Stripe's requirement buckets, surfaced separately so the UI can
     # distinguish "needs attention soon" (currently_due) from "already
     # overdue, account disabled" (past_due). Each entry is a Stripe key
@@ -90,7 +95,76 @@ class StripeConnectService:
             )
         stripe.api_key = settings.STRIPE_SECRET_KEY
 
-    # ─── Account lifecycle ───────────────────────────────────────────────
+    def _require_debit_payout_token(self, card_token: str) -> None:
+        """Ensure the tokenized card is debit or prepaid — never credit.
+
+        Stripe's external-account attach may fail opaquely; we retrieve the
+        Token first so we can return a clear INVALID_CARD for credit cards.
+        """
+        token_id = (card_token or "").strip()
+        if not token_id.startswith("tok_"):
+            raise StripeConnectError(
+                "INVALID_CARD",
+                "Invalid card token. Please try adding your card again.",
+            )
+        try:
+            tok = stripe.Token.retrieve(token_id)
+        except stripe.error.InvalidRequestError as e:
+            raise StripeConnectError(
+                "INVALID_CARD", self._safe_stripe_message(e)
+            )
+        except stripe.error.StripeError as e:
+            logger.exception("stripe_token_retrieve_failed")
+            raise StripeConnectError(
+                "STRIPE_ERROR", self._safe_stripe_message(e)
+            )
+
+        card = getattr(tok, "card", None)
+        ttype = getattr(tok, "type", None)
+        if ttype != "card":
+            raise StripeConnectError(
+                "INVALID_CARD",
+                "A card token was expected for this request.",
+            )
+        funding = (
+            getattr(card, "funding", None) if card is not None else None
+        )
+        if funding == "credit":
+            raise StripeConnectError(
+                "INVALID_CARD",
+                "Credit cards can't be used for payouts. Add a US debit card.",
+            )
+        if funding is not None and funding not in _ALLOWED_PAYOUT_TOKEN_FUNDING:
+            raise StripeConnectError(
+                "INVALID_CARD",
+                "Use a US debit card for payouts. Credit cards aren't supported.",
+            )
+
+    def _require_bank_payout_token(self, bank_token: str) -> None:
+        """Ensure `tok_...` is a US bank-account token from the client SDK."""
+        token_id = (bank_token or "").strip()
+        if not token_id.startswith("tok_"):
+            raise StripeConnectError(
+                "INVALID_BANK_ACCOUNT",
+                "Invalid bank token. Please try again.",
+            )
+        try:
+            tok = stripe.Token.retrieve(token_id)
+        except stripe.error.InvalidRequestError as e:
+            raise StripeConnectError(
+                "INVALID_BANK_ACCOUNT", self._safe_stripe_message(e)
+            )
+        except stripe.error.StripeError as e:
+            logger.exception("stripe_bank_token_retrieve_failed")
+            raise StripeConnectError(
+                "STRIPE_ERROR", self._safe_stripe_message(e)
+            )
+        if getattr(tok, "type", None) != "bank_account":
+            raise StripeConnectError(
+                "INVALID_BANK_ACCOUNT",
+                "Use a US checking account for payouts.",
+            )
+
 
     def ensure_connected_account(self, user: User) -> str:
         """Return the user's `acct_...` id, creating a Custom account if
@@ -224,8 +298,9 @@ class StripeConnectService:
         user: User,
         *,
         individual: dict,
-        card_token: str,
         client_ip: str,
+        card_token: Optional[str] = None,
+        bank_token: Optional[str] = None,
         payment_method_id: Optional[str] = None,
     ) -> ConnectedAccountStatus:
         """Complete in-app onboarding in a single call.
@@ -237,19 +312,26 @@ class StripeConnectService:
               address_line1, address_city, address_state, address_postal_code,
               ssn_last_4, phone,
             }
-        `card_token` is a `tok_...` produced by Stripe Elements / React
-        Native SDK on the client — the raw card number never touches
-        our servers. `client_ip` is required by Stripe for ToS
-        acceptance on Custom accounts (CCPA/PCI evidence trail).
+        Exactly one of `card_token` or `bank_token` must be set — each a
+        `tok_...` from the Stripe client SDK (`Card` or `BankAccount`).
+        `client_ip` is required by Stripe for Custom-account ToS
+        acceptance.
 
-        Flow, all in one atomic-ish sequence:
+        Flow:
           1. Ensure Custom account exists.
           2. `Account.modify`: set `individual.*` + `tos_acceptance`.
-          3. `Account.create_external_account`: attach the card token as
-             the payout destination. Stripe rejects non-debit cards here
-             automatically — we don't need to pre-check the brand.
-          4. Refresh cached status and return it.
+          3. Validate token (debit card or bank), then
+             `Account.create_external_account`.
+          4. Optionally attach `payment_method_id` (card only) to Customer.
+          5. Refresh cached status and return it.
         """
+        ct = (card_token or "").strip() or None
+        bt = (bank_token or "").strip() or None
+        if bool(ct) + bool(bt) != 1:
+            raise StripeConnectError(
+                "INVALID_CARD",
+                "Provide either a debit card token or a bank account token.",
+            )
         account_id = self.ensure_connected_account(user)
 
         dob = {
@@ -302,14 +384,18 @@ class StripeConnectService:
                 "STRIPE_ERROR", self._safe_stripe_message(e)
             )
 
-        # Attach the tokenized debit card as the default payout
-        # destination. If the user already had a card attached, this
-        # adds a new one — we then mark it `default_for_currency=True`
-        # so payouts route to the latest card.
+        # Attach the tokenized payout destination (debit card or bank).
+        # If the user already had an account attached, this adds a new one;
+        # `default_for_currency=True` routes payouts to the latest.
+        attach_token = ct or bt
+        if ct:
+            self._require_debit_payout_token(ct)
+        else:
+            self._require_bank_payout_token(bt)
         try:
             ext = stripe.Account.create_external_account(
                 account_id,
-                external_account=card_token,
+                external_account=attach_token,
                 default_for_currency=True,
             )
         except stripe.error.CardError as e:
@@ -317,12 +403,8 @@ class StripeConnectService:
                 "CARD_DECLINED", self._safe_stripe_message(e)
             )
         except stripe.error.InvalidRequestError as e:
-            # Stripe rejects credit cards and non-US debit cards with
-            # InvalidRequestError; surface a specific error so the UI
-            # can say "use a US debit card".
-            raise StripeConnectError(
-                "INVALID_CARD", self._safe_stripe_message(e)
-            )
+            code = "INVALID_BANK_ACCOUNT" if bt else "INVALID_CARD"
+            raise StripeConnectError(code, self._safe_stripe_message(e))
         except stripe.error.StripeError as e:
             logger.exception("stripe_connect_external_account_failed")
             raise StripeConnectError(
@@ -338,14 +420,9 @@ class StripeConnectService:
             },
         )
 
-        # If the client also sent a PaymentMethod id (same physical card,
-        # separately tokenized), attach it to the user's Stripe Customer
-        # so the same debit card works for CHARGING them (paying a bill
-        # as a guest). Without this, the user would have to re-add their
-        # card through the separate "Add Payment Method" flow. Failures
-        # here are non-fatal — Connect setup is the primary goal; the
-        # payment-method sync is convenience and can be redone later.
-        if payment_method_id:
+        # If the client also sent a PaymentMethod id (card flow only),
+        # attach it to the user's Stripe Customer for paying bills as a guest.
+        if payment_method_id and ct:
             try:
                 self._sync_payment_method_to_customer(user, payment_method_id)
             except Exception:
@@ -408,6 +485,7 @@ class StripeConnectService:
                 has_instant_external_account=False,
                 external_account_last4=None,
                 external_account_brand=None,
+                external_account_type=None,
                 requirements_due=[],
                 requirements_past_due=[],
                 disabled_reason=None,
@@ -432,7 +510,7 @@ class StripeConnectService:
         past_due = list(req_obj.get("past_due") or [])
         disabled_reason = req_obj.get("disabled_reason")
 
-        has_instant, last4, brand = self._inspect_external_accounts(
+        has_instant, last4, brand, acct_type = self._inspect_external_accounts(
             user.stripe_account_id
         )
 
@@ -451,42 +529,41 @@ class StripeConnectService:
             has_instant_external_account=has_instant,
             external_account_last4=last4,
             external_account_brand=brand,
+            external_account_type=acct_type,
             requirements_due=currently_due,
             requirements_past_due=past_due,
             disabled_reason=disabled_reason,
         )
 
     def replace_external_account(
-        self, user: User, *, card_token: str
+        self,
+        user: User,
+        *,
+        card_token: Optional[str] = None,
+        bank_token: Optional[str] = None,
     ) -> ConnectedAccountStatus:
-        """Swap the user's payout card without re-running KYC.
+        """Swap the payout card or bank account without re-running KYC.
 
-        Used by the "Change card on file" flow — the user has a Custom
-        account already, identity is on file, they just want to point
-        future payouts at a new debit card. We:
-
-          1. Attach the new card as an external account with
-             `default_for_currency=True` so subsequent payouts route to
-             it immediately.
-          2. Stripe auto-demotes the previously-default card for the
-             same currency, so we don't need to `default_for_currency`-
-             flip anything else. We also don't delete the old card — if
-             the user wants to go back to it they'll add it again; no
-             stored cleanup risk if the new attach fails midway.
-
-        Requires the account to already exist. If for some reason we're
-        called on a user without one, we fall through to
-        `ensure_connected_account` which just creates the skeleton; the
-        attach then succeeds (though the user is now in a weird "card
-        attached but identity never submitted" state — this path isn't
-        a normal entry point, so that's acceptable).
+        Exactly one of `card_token` or `bank_token` must be supplied.
         """
+        ct = (card_token or "").strip() or None
+        bt = (bank_token or "").strip() or None
+        if bool(ct) + bool(bt) != 1:
+            raise StripeConnectError(
+                "INVALID_CARD",
+                "Provide either a debit card token or a bank account token.",
+            )
         account_id = self.ensure_connected_account(user)
 
+        attach = ct or bt
+        if ct:
+            self._require_debit_payout_token(ct)
+        else:
+            self._require_bank_payout_token(bt)
         try:
             ext = stripe.Account.create_external_account(
                 account_id,
-                external_account=card_token,
+                external_account=attach,
                 default_for_currency=True,
             )
         except stripe.error.CardError as e:
@@ -494,9 +571,8 @@ class StripeConnectService:
                 "CARD_DECLINED", self._safe_stripe_message(e)
             )
         except stripe.error.InvalidRequestError as e:
-            raise StripeConnectError(
-                "INVALID_CARD", self._safe_stripe_message(e)
-            )
+            code = "INVALID_BANK_ACCOUNT" if bt else "INVALID_CARD"
+            raise StripeConnectError(code, self._safe_stripe_message(e))
         except stripe.error.StripeError as e:
             logger.exception("stripe_connect_external_account_replace_failed")
             raise StripeConnectError(
@@ -600,43 +676,71 @@ class StripeConnectService:
 
     def _inspect_external_accounts(
         self, account_id: str
-    ) -> tuple[bool, Optional[str], Optional[str]]:
-        """Returns (has_instant, last4, brand).
+    ) -> tuple[bool, Optional[str], Optional[str], Optional[str]]:
+        """Returns (has_instant, last4, display_name, account_type).
 
-        Checks `available_payout_methods` on each external account — an
-        entry of `"instant"` means Stripe can instant-payout to that card
-        or bank account. Without an instant-capable external account, a
-        payout with `method="instant"` will 400.
+        `display_name` is card brand (e.g. Visa) or bank name.
+        `account_type` is ``card`` | ``bank`` | None.
         """
         has_instant = False
         last4: Optional[str] = None
         brand: Optional[str] = None
+        acct_type: Optional[str] = None
 
         try:
             cards = stripe.Account.list_external_accounts(
-                account_id, object="card", limit=10
+                account_id, object="card", limit=20
             )
-            for card in cards.data or []:
+            cards_data = list(cards.data or [])
+            banks = stripe.Account.list_external_accounts(
+                account_id, object="bank_account", limit=20
+            )
+            banks_data = list(banks.data or [])
+
+            for card in cards_data:
                 apm = getattr(card, "available_payout_methods", None) or []
                 if "instant" in apm:
-                    return True, card.last4, card.brand
+                    has_instant = True
+                    break
+            if not has_instant:
+                for ba in banks_data:
+                    apm = getattr(ba, "available_payout_methods", None) or []
+                    if "instant" in apm:
+                        has_instant = True
+                        break
 
-            banks = stripe.Account.list_external_accounts(
-                account_id, object="bank_account", limit=10
-            )
-            for ba in banks.data or []:
-                apm = getattr(ba, "available_payout_methods", None) or []
-                if "instant" in apm:
-                    return True, ba.last4, ba.bank_name or "Bank"
+            for card in cards_data:
+                if getattr(card, "default_for_currency", False):
+                    last4 = card.last4
+                    raw = getattr(card, "brand", None) or "Card"
+                    brand = raw.title() if isinstance(raw, str) else str(raw)
+                    acct_type = "card"
+                    break
+            if last4 is None:
+                for ba in banks_data:
+                    if getattr(ba, "default_for_currency", False):
+                        last4 = getattr(ba, "last4", None)
+                        brand = getattr(ba, "bank_name", None) or "Bank"
+                        acct_type = "bank"
+                        break
+            if last4 is None and cards_data:
+                c = cards_data[0]
+                last4 = c.last4
+                raw = getattr(c, "brand", None) or "Card"
+                brand = raw.title() if isinstance(raw, str) else str(raw)
+                acct_type = "card"
+            elif last4 is None and banks_data:
+                ba = banks_data[0]
+                last4 = getattr(ba, "last4", None)
+                brand = getattr(ba, "bank_name", None) or "Bank"
+                acct_type = "bank"
         except stripe.error.StripeError:
-            # Non-fatal — we return False and let validation fail cleanly
-            # downstream rather than blowing up the whole status call.
             logger.warning(
                 "stripe_connect_list_external_failed",
                 extra={"account_id": account_id},
             )
 
-        return has_instant, last4, brand
+        return has_instant, last4, brand, acct_type
 
     def _refresh_user_from_account_webhook(self, account_obj: dict) -> None:
         acct_id = account_obj.get("id")

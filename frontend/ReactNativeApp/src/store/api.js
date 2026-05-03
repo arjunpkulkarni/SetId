@@ -8,6 +8,53 @@ import { offlineStorage } from '../services/offlineStorage';
 export const DASHBOARD_CACHE_KEY = 'dashboard_v2';
 /** TTL for persisted dashboard payload (exported for optimistic deletes). */
 export const DASHBOARD_CACHE_TTL = 24 * 60 * 60 * 1000;
+
+/**
+ * Bill IDs recently deleted on the dashboard. In-flight GET /dashboard
+ * responses that started before DELETE can still contain the old row; we
+ * filter them out until the server no longer returns that id (then we drop
+ * the tombstone). See handleDeleteBill optimistic + refetch race.
+ */
+const dashboardDeletedBillTombstones = new Set();
+
+/** Call when starting an optimistic bill delete (before await delete). */
+export function tombstoneDashboardBillDeletion(billId) {
+  if (billId != null) dashboardDeletedBillTombstones.add(String(billId));
+}
+
+/** Call when DELETE failed and the bill should reappear. */
+export function clearDashboardBillTombstone(billId) {
+  if (billId != null) dashboardDeletedBillTombstones.delete(String(billId));
+}
+
+function reconcileDashboardTombstones(activeRaw, pastRaw) {
+  const inServer = new Set([
+    ...(activeRaw ?? []).map((b) => String(b.id)),
+    ...(pastRaw ?? []).map((b) => String(b.id)),
+  ]);
+  for (const id of [...dashboardDeletedBillTombstones]) {
+    if (!inServer.has(id)) {
+      dashboardDeletedBillTombstones.delete(id);
+    }
+  }
+}
+
+function filterTombstonedBills(bills) {
+  if (!dashboardDeletedBillTombstones.size) return bills ?? [];
+  return (bills ?? []).filter((b) => !dashboardDeletedBillTombstones.has(String(b.id)));
+}
+
+function transformDashboardPayload(response) {
+  const activeRaw = response.data?.active_bills ?? [];
+  const pastRaw = response.data?.past_bills ?? [];
+  reconcileDashboardTombstones(activeRaw, pastRaw);
+  return {
+    overview: response.data?.overview ?? null,
+    activeBills: filterTombstonedBills(activeRaw),
+    pastBills: filterTombstonedBills(pastRaw),
+  };
+}
+
 /** Accept a cached payload up to 24h old on cold open — RTK Query refetches
  * RTK Query API slice — the cache, deduplication, and revalidation story.
  *
@@ -78,11 +125,7 @@ export const api = createApi({
     // instantly from disk while the background refetch runs.
     getDashboard: builder.query({
       query: () => '/dashboard',
-      transformResponse: (response) => ({
-        overview: response.data?.overview ?? null,
-        activeBills: response.data?.active_bills ?? [],
-        pastBills: response.data?.past_bills ?? [],
-      }),
+      transformResponse: (response) => transformDashboardPayload(response),
       providesTags: (result) => {
         const billTags = result?.activeBills
           ? result.activeBills.map((b) => ({ type: 'Bill', id: b.id }))
@@ -187,14 +230,18 @@ export async function hydrateDashboardFromCache(dispatch) {
     });
     if (!cached?.data) return null;
 
+    const payload = {
+      ...cached.data,
+      activeBills: filterTombstonedBills(cached.data.activeBills),
+      pastBills: filterTombstonedBills(cached.data.pastBills),
+    };
+
     // `upsertQueryData` injects data into the RTK Query cache without
     // triggering a network request — the next subscriber sees it
     // immediately. The real refetch still runs because refetchOnFocus /
     // refetchOnMountOrArgChange are on for `useGetDashboardQuery`.
-    dispatch(
-      api.util.upsertQueryData('getDashboard', undefined, cached.data),
-    );
-    return cached.data;
+    dispatch(api.util.upsertQueryData('getDashboard', undefined, payload));
+    return payload;
   } catch {
     return null;
   }

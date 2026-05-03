@@ -5,7 +5,11 @@ export default function ReceiptCard({ paymentInfo }) {
   const items = paymentInfo.items || [];
   const subtotal = parseFloat(paymentInfo.subtotal ?? paymentInfo.amount ?? 0) || 0;
   const tax = parseFloat(paymentInfo.tax ?? paymentInfo.tax_share ?? 0) || 0;
-  const serviceFee = parseFloat(paymentInfo.service_fee ?? paymentInfo.tip_share ?? paymentInfo.fee_share ?? 0) || 0;
+  // Tip and platform fee are separate on the API (`tip_share` / `fee_share`).
+  // Do not merge with ?? — one line would hide the other (e.g. $10.23 shown vs $10.40 total).
+  const tip = parseFloat(paymentInfo.tip_share ?? paymentInfo.tip ?? 0) || 0;
+  const serviceFee =
+    parseFloat(paymentInfo.fee_share ?? paymentInfo.service_fee ?? 0) || 0;
   const total = parseFloat(paymentInfo.total ?? paymentInfo.total_owed ?? subtotal) || 0;
 
   return (
@@ -37,6 +41,12 @@ export default function ReceiptCard({ paymentInfo }) {
           <div className="breakdown-row">
             <span className="breakdown-label">Tax</span>
             <span className="breakdown-value">{formatCurrency(tax)}</span>
+          </div>
+        )}
+        {tip > 0 && (
+          <div className="breakdown-row">
+            <span className="breakdown-label">Tip (your share)</span>
+            <span className="breakdown-value">{formatCurrency(tip)}</span>
           </div>
         )}
         {serviceFee > 0 && (

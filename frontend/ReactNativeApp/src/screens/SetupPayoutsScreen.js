@@ -18,6 +18,13 @@ import { CardField, useStripe } from '@stripe/stripe-react-native';
 import { colors, radii, shadows } from '../theme';
 import { useAuth } from '../contexts/AuthContext';
 import { stripeConnect, users as usersApi } from '../services/api';
+import {
+  createBankAccountTokenWithRetry,
+  createCardTokenWithRetry,
+  getPayoutFundingBlockReason,
+  normalizePayoutErr,
+  withPayoutSetupRetry,
+} from '../utils/payoutErrors';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -114,6 +121,11 @@ export default function SetupPayoutsScreen({ navigation }) {
 
   const [ssnLast4, setSsnLast4] = useState('');
 
+  /** 'card' | 'bank' — Connect external account type */
+  const [payoutChannel, setPayoutChannel] = useState('card');
+  const [bankRouting, setBankRouting] = useState('');
+  const [bankAccount, setBankAccount] = useState('');
+
   const [cardComplete, setCardComplete] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -196,7 +208,14 @@ export default function SetupPayoutsScreen({ navigation }) {
     if (!addressState.trim()) missing.push('State');
     if (!addressPostalCode.trim()) missing.push('ZIP');
     if (digitsOnly(ssnLast4).length !== 4) missing.push('SSN last 4');
-    if (!cardComplete) missing.push('Debit card');
+    if (payoutChannel === 'card') {
+      if (!cardComplete) missing.push('Debit card');
+    } else {
+      const r = digitsOnly(bankRouting);
+      if (r.length !== 9) missing.push('Routing number (9 digits)');
+      const acct = String(bankAccount ?? '').replace(/\s/g, '');
+      if (acct.length < 4 || acct.length > 17) missing.push('Account number');
+    }
 
     if (missing.length) {
       Alert.alert('Missing info', `Please fill in: ${missing.join(', ')}`);
@@ -247,64 +266,90 @@ export default function SetupPayoutsScreen({ navigation }) {
 
     setSubmitting(true);
     try {
-      // 1) Tokenize the debit card as a Connect external-account token.
-      //    Passing `currency: 'usd'` tags it for use on a Connect account
-      //    (vs. a plain card token for charging). The raw PAN never
-      //    leaves the device.
       const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
-      const { token, error: tokenError } = await createToken({
-        type: 'Card',
-        name: fullName,
-        currency: 'usd',
-      });
-      if (tokenError) {
-        Alert.alert(
-          'Card error',
-          tokenError.message ?? 'Could not read that card. Try again.',
-        );
-        setSubmitting(false);
-        return;
-      }
-      if (!token?.id) {
-        Alert.alert('Card error', 'Could not tokenize the card. Try again.');
-        setSubmitting(false);
-        return;
-      }
-
-      // 2) ALSO create a reusable PaymentMethod from the same card input.
-      //    This is what the platform's Stripe Customer will charge when
-      //    the user pays for a bill as a guest. Without this, the user
-      //    would have to re-add their card via the separate "Add Payment
-      //    Method" flow — same card, duplicate work.
-      //
-      //    Non-fatal: if this fails we still complete payout setup and
-      //    the user can add a payment method later via the old flow.
+      let cardTokenId = null;
+      let bankTokenId = null;
       let paymentMethodId = null;
-      try {
-        const { paymentMethod, error: pmError } = await createPaymentMethod({
-          paymentMethodType: 'Card',
-          paymentMethodData: {
-            billingDetails: {
-              name: fullName,
-              email: email.trim() || undefined,
-              phone: phone.trim() || undefined,
-            },
+
+      if (payoutChannel === 'card') {
+        const { token, error: tokenError } = await createCardTokenWithRetry(
+          createToken,
+          {
+            type: 'Card',
+            name: fullName,
+            currency: 'usd',
           },
-        });
-        if (!pmError && paymentMethod?.id) {
-          paymentMethodId = paymentMethod.id;
+        );
+        if (tokenError) {
+          Alert.alert(
+            'Card error',
+            tokenError.message ?? 'Could not read that card. Try again.',
+          );
+          setSubmitting(false);
+          return;
         }
-      } catch (pmErr) {
-        if (__DEV__) console.warn('[SetupPayouts] createPaymentMethod failed', pmErr);
+        if (!token?.id) {
+          Alert.alert('Card error', 'Could not tokenize the card. Try again.');
+          setSubmitting(false);
+          return;
+        }
+
+        const fundingBlock = getPayoutFundingBlockReason(token);
+        if (fundingBlock) {
+          Alert.alert('Debit card required', fundingBlock);
+          setSubmitting(false);
+          return;
+        }
+
+        cardTokenId = token.id;
+
+        try {
+          const { paymentMethod, error: pmError } = await createPaymentMethod({
+            paymentMethodType: 'Card',
+            paymentMethodData: {
+              billingDetails: {
+                name: fullName,
+                email: email.trim() || undefined,
+                phone: phone.trim() || undefined,
+              },
+            },
+          });
+          if (!pmError && paymentMethod?.id) {
+            paymentMethodId = paymentMethod.id;
+          }
+        } catch (pmErr) {
+          if (__DEV__) console.warn('[SetupPayouts] createPaymentMethod failed', pmErr);
+        }
+      } else {
+        const { token, error: tokenError } = await createBankAccountTokenWithRetry(
+          createToken,
+          {
+            type: 'BankAccount',
+            country: 'US',
+            currency: 'usd',
+            routingNumber: digitsOnly(bankRouting),
+            accountNumber: String(bankAccount ?? '').replace(/\s/g, ''),
+            accountHolderName: fullName,
+            accountHolderType: 'Individual',
+          },
+        );
+        if (tokenError) {
+          Alert.alert(
+            'Bank error',
+            tokenError.message ?? 'Could not verify that account. Check routing and account numbers.',
+          );
+          setSubmitting(false);
+          return;
+        }
+        if (!token?.id) {
+          Alert.alert('Bank error', 'Could not tokenize the bank account. Try again.');
+          setSubmitting(false);
+          return;
+        }
+        bankTokenId = token.id;
       }
 
-      // 3) Submit identity + token (+ optional PM id) to the backend. The
-      //    server creates (or reuses) the Custom account, sets identity,
-      //    attaches the card as external account, accepts the Stripe ToS,
-      //    and — if paymentMethodId is present — also attaches the PM to
-      //    the user's Stripe Customer so the same card works for
-      //    charging them when they pay a bill.
-      await stripeConnect.setupPayouts({
+      const setupPayload = {
         individual: {
           first_name: firstName.trim(),
           last_name: lastName.trim(),
@@ -319,9 +364,11 @@ export default function SetupPayoutsScreen({ navigation }) {
           address_postal_code: addressPostalCode.trim(),
           ssn_last_4: digitsOnly(ssnLast4),
         },
-        card_token: token.id,
-        payment_method_id: paymentMethodId,
-      });
+        ...(paymentMethodId ? { payment_method_id: paymentMethodId } : {}),
+        ...(cardTokenId ? { card_token: cardTokenId } : { bank_token: bankTokenId }),
+      };
+
+      await withPayoutSetupRetry(() => stripeConnect.setupPayouts(setupPayload));
 
       Alert.alert(
         "You're all set",
@@ -334,17 +381,21 @@ export default function SetupPayoutsScreen({ navigation }) {
         ],
       );
     } catch (err) {
-      const code = err?.error?.code;
-      const message =
-        err?.error?.message
-        ?? err?.message
-        ?? 'Could not set up payouts. Please try again.';
+      const { code, message } = normalizePayoutErr(
+        err,
+        'Could not set up payouts. Please try again.',
+      );
 
       // Friendly copy for the most common rejection reasons.
       if (code === 'INVALID_CARD') {
         Alert.alert(
           'Card not supported',
           "This card can't be used as a payout method. Try a US debit card.",
+        );
+      } else if (code === 'INVALID_BANK_ACCOUNT') {
+        Alert.alert(
+          'Bank account not supported',
+          message || 'Check your routing and account numbers, or try a different US checking account.',
         );
       } else if (code === 'CARD_DECLINED') {
         Alert.alert('Card declined', message);
@@ -395,8 +446,9 @@ export default function SetupPayoutsScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.intro}>
-          Add a payout method so we can send you your share when your group
-          pays. Handled by Stripe — your card info never touches our servers.
+          Add where you want to receive your share when your group pays. Choose a
+          US debit card or a US checking account — numbers are tokenized by Stripe
+          and never touch our servers.
         </Text>
 
         {/* Identity ------------------------------------------------------ */}
@@ -597,27 +649,104 @@ export default function SetupPayoutsScreen({ navigation }) {
           </Text>
         </View>
 
-        {/* Debit card ---------------------------------------------------- */}
+        {/* Payout: debit card or US bank (ACH) -------------------------- */}
         <Text style={styles.sectionLabel}>Payout method</Text>
+        <View style={styles.methodRow}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => setPayoutChannel('card')}
+            style={[
+              styles.methodChip,
+              payoutChannel === 'card' && styles.methodChipOn,
+            ]}
+          >
+            <MaterialIcons
+              name="credit-card"
+              size={18}
+              color={payoutChannel === 'card' ? colors.onSecondary : colors.onSurfaceVariant}
+            />
+            <Text
+              style={[
+                styles.methodChipText,
+                payoutChannel === 'card' && styles.methodChipTextOn,
+              ]}
+            >
+              Debit card
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => setPayoutChannel('bank')}
+            style={[
+              styles.methodChip,
+              payoutChannel === 'bank' && styles.methodChipOn,
+            ]}
+          >
+            <MaterialIcons
+              name="account-balance"
+              size={18}
+              color={payoutChannel === 'bank' ? colors.onSecondary : colors.onSurfaceVariant}
+            />
+            <Text
+              style={[
+                styles.methodChipText,
+                payoutChannel === 'bank' && styles.methodChipTextOn,
+              ]}
+            >
+              Bank account
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={[styles.card, shadows.card]}>
-          <CardField
-            postalCodeEnabled={false}
-            placeholders={{ number: '4242 4242 4242 4242' }}
-            cardStyle={{
-              backgroundColor: colors.surfaceContainerLow,
-              textColor: colors.onSurface,
-              placeholderColor: colors.outline,
-              borderRadius: 8,
-              fontSize: 16,
-            }}
-            style={styles.cardField}
-            onCardChange={(details) => setCardComplete(!!details?.complete)}
-          />
-          <Text style={styles.helpText}>
-            Tap the card field to fill from your Wallet, or enter a US debit
-            card manually. Funds usually arrive 1–2 business days after your
-            group pays.
-          </Text>
+          {payoutChannel === 'card' ? (
+            <>
+              <CardField
+                postalCodeEnabled={false}
+                placeholders={{ number: '4242 4242 4242 4242' }}
+                cardStyle={{
+                  backgroundColor: colors.surfaceContainerLow,
+                  textColor: colors.onSurface,
+                  placeholderColor: colors.outline,
+                  borderRadius: 8,
+                  fontSize: 16,
+                }}
+                style={styles.cardField}
+                onCardChange={(details) => setCardComplete(!!details?.complete)}
+              />
+              <Text style={styles.helpText}>
+                US debit card only — no credit cards. Funds usually arrive 1–2
+                business days after your group pays.
+              </Text>
+            </>
+          ) : (
+            <>
+              <LabeledField
+                label="Routing number"
+                value={bankRouting}
+                onChangeText={(v) => setBankRouting(digitsOnly(v).slice(0, 9))}
+                placeholder="110000000"
+                keyboardType="number-pad"
+                maxLength={9}
+                autoComplete="off"
+              />
+              <LabeledField
+                label="Account number"
+                value={bankAccount}
+                onChangeText={(v) =>
+                  setBankAccount(String(v ?? '').replace(/[^\d\s]/g, ''))
+                }
+                placeholder="Checking account"
+                keyboardType="number-pad"
+                autoComplete="off"
+                secureTextEntry
+              />
+              <Text style={styles.helpText}>
+                US checking account in your name. Payouts are sent via ACH (1–3
+                business days). Same legal name as above.
+              </Text>
+            </>
+          )}
         </View>
 
         {/* Submit -------------------------------------------------------- */}
@@ -766,6 +895,38 @@ const styles = StyleSheet.create({
   cardField: {
     height: 50,
     marginBottom: 4,
+  },
+
+  methodRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  methodChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surfaceContainerLow,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  methodChipOn: {
+    backgroundColor: colors.secondary,
+    borderColor: colors.secondaryDim,
+  },
+  methodChipText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.onSurfaceVariant,
+  },
+  methodChipTextOn: {
+    color: colors.onSecondary,
   },
 
   submitBtn: {
