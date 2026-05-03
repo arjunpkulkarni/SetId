@@ -41,6 +41,12 @@ const RECEIPT_ICON_FEATURED_BG = '#FCE4EC';
 const RECEIPT_ICON_FEATURED_FG = '#880E4F';
 const MINT_ICON_BG = '#E0F2F1';
 
+/** FAB pinned to bottom-right of the *tab screen* (area above the tab bar).
+ *  Do not add `tabBarHeight` here — React Navigation already lays out the
+ *  screen above the bar; large `bottom` values float the button into the list. */
+const FAB_BOTTOM = 24;
+const FAB_RIGHT = 20;
+
 
 /** Keeps header compact so action icons stay on-screen (E.164 is very long). */
 function compactDisplayName(raw) {
@@ -129,7 +135,7 @@ function firstNameFromUser(user) {
   return first.length > 16 ? `${first.slice(0, 14)}…` : first;
 }
 
-function TopAppBar({ insets, user }) {
+function TopAppBar({ insets, user, navigation }) {
   const { logout } = useAuth();
   const firstName = firstNameFromUser(user);
 
@@ -160,7 +166,8 @@ function TopAppBar({ insets, user }) {
         </View>
         <TouchableOpacity
           accessibilityLabel="Account"
-          accessibilityHint="Long press to log out"
+          accessibilityHint="Opens profile. Long press to log out."
+          onPress={() => navigation.navigate('ProfileTab')}
           onLongPress={confirmLogout}
           activeOpacity={0.85}
           style={styles.headerAvatarBtn}
@@ -553,13 +560,13 @@ function RecentActivitySection({ activities, onItemPress }) {
   );
 }
 
-function FloatingActionButton({ bottomOffset, onPress, loading }) {
+function FloatingActionButton({ onPress, loading }) {
   return (
     <TouchableOpacity
       activeOpacity={0.85}
       onPress={onPress}
       disabled={loading}
-      style={[styles.fab, shadows.fab, { bottom: bottomOffset }]}
+      style={[styles.fab, shadows.fab]}
     >
       <LinearGradient
         colors={[DASHBOARD_GREEN, DASHBOARD_GREEN_MID]}
@@ -760,7 +767,7 @@ export default function DashboardScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <TopAppBar insets={insets} user={user} />
+      <TopAppBar insets={insets} user={user} navigation={navigation} />
 
       <ScrollView
         style={styles.scroll}
@@ -800,7 +807,6 @@ export default function DashboardScreen({ navigation }) {
       </ScrollView>
 
       <FloatingActionButton
-        bottomOffset={tabBarHeight + Math.max(insets.bottom, 6) + 4}
         loading={creatingBill}
         onPress={handleCreateBillFromReceipt}
       />
@@ -888,6 +894,7 @@ const styles = StyleSheet.create({
   },
 
   balanceHeroWrap: {
+    marginTop: 24,
     marginBottom: 8,
   },
   balanceGradientCard: {
@@ -1226,7 +1233,8 @@ const styles = StyleSheet.create({
 
   fab: {
     position: 'absolute',
-    right: 24,
+    right: FAB_RIGHT,
+    bottom: FAB_BOTTOM,
     zIndex: 40,
   },
   fabGradient: {

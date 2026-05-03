@@ -90,6 +90,12 @@ export default function ProfileScreen({ navigation }) {
     ? formatPhoneForDisplay(display?.phone)
     : (display?.email || '');
 
+  const goToPayouts = useCallback(() => {
+    const parent = navigation.getParent();
+    if (parent) parent.navigate('Payouts');
+    else navigation.navigate('Payouts');
+  }, [navigation]);
+
   const handleLogout = () => {
     Alert.alert('Log out', 'Are you sure you want to log out?', [
       { text: 'Cancel', style: 'cancel' },
@@ -187,7 +193,7 @@ export default function ProfileScreen({ navigation }) {
               <Text style={styles.sectionLabel}>Payouts</Text>
               <TouchableOpacity
                 activeOpacity={0.7}
-                onPress={() => navigation.navigate('Payouts')}
+                onPress={goToPayouts}
                 style={[styles.rowCard, shadows.card]}
               >
                 <View style={styles.row}>
