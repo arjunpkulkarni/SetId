@@ -96,6 +96,7 @@ class ParsedReceiptItem(BaseModel):
 class ParsedReceipt(BaseModel):
     items: list[ParsedReceiptItem]
     tax: Decimal
+    receipt_extra_fees: Decimal = Decimal("0.00")
     tip: Decimal = Decimal("0.00")
     total: Decimal
     merchant_name: str | None = None

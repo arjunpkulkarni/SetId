@@ -268,10 +268,10 @@ class CalculationService:
         if percentage is not None:
             bill.service_fee_percentage = percentage
 
-        # Calculate and apply the fee
         # Bill total tracks the full amount the host paid.
         bill.service_fee = self.calculate_service_fee(bill_id)
-        bill.total = bill.subtotal + bill.tax + (bill.tip or Decimal("0")) + bill.service_fee
+        rx = bill.receipt_extra_fees or Decimal("0")
+        bill.total = bill.subtotal + bill.tax + (bill.tip or Decimal("0")) + rx + bill.service_fee
 
         self.db.commit()
         self.db.refresh(bill)
@@ -320,7 +320,8 @@ class CalculationService:
         if bill:
             # Recalculate service fee based on current settings.
             bill.service_fee = self.calculate_service_fee(bill_id)
-            bill.total = bill.subtotal + bill.tax + (bill.tip or Decimal("0")) + bill.service_fee
+            rx = bill.receipt_extra_fees or Decimal("0")
+            bill.total = bill.subtotal + bill.tax + (bill.tip or Decimal("0")) + rx + bill.service_fee
 
         self.db.commit()
 
@@ -360,9 +361,12 @@ class CalculationService:
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
 
-        bill_fee = bill.service_fee or Decimal("0")
-        if bill_fee == Decimal("0") and bill_subtotal > 0:
-            bill_fee = self.calculate_service_fee(bill_id)
+        bill_receipt_extra = bill.receipt_extra_fees or Decimal("0")
+        bill_platform = bill.service_fee or Decimal("0")
+        if bill_platform == Decimal("0") and bill_subtotal > 0:
+            bill_platform = self.calculate_service_fee(bill_id)
+
+        bill_fee = bill_receipt_extra + bill_platform
 
         # Aggregate assignment subtotals and succeeded-payment totals per
         # member in two queries instead of 2×N. On a bill with 10 members

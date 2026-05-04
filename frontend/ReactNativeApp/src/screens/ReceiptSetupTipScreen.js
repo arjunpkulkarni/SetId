@@ -208,15 +208,18 @@ export default function ReceiptSetupTipScreen({ navigation, route }) {
           {tipMode && tipMode !== 'no_tip' ? (
             <View style={styles.amountWrap}>
               <Text style={styles.amountLabel}>Tip amount</Text>
-              <TextInput
-                value={tipInput}
-                onChangeText={(v) => setTipInput(cleanMoneyText(v))}
-                keyboardType="decimal-pad"
-                inputAccessoryViewID={Platform.OS === 'ios' ? TIP_AMOUNT_INPUT_ACCESSORY_ID : undefined}
-                placeholder="0.00"
-                placeholderTextColor={colors.outline}
-                style={styles.amountInput}
-              />
+              <View style={styles.amountInputOuter}>
+                <Text style={styles.amountPrefix}>$</Text>
+                <TextInput
+                  value={tipInput}
+                  onChangeText={(v) => setTipInput(cleanMoneyText(v))}
+                  keyboardType="decimal-pad"
+                  inputAccessoryViewID={Platform.OS === 'ios' ? TIP_AMOUNT_INPUT_ACCESSORY_ID : undefined}
+                  placeholder="0.00"
+                  placeholderTextColor={colors.outline}
+                  style={styles.amountInput}
+                />
+              </View>
             </View>
           ) : null}
 
@@ -377,17 +380,34 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     marginBottom: 8,
   },
-  amountInput: {
+  amountInputOuter: {
+    flexDirection: 'row',
+    alignItems: 'center',
     minHeight: 52,
     borderWidth: 1,
     borderColor: colors.outlineVariant,
     borderRadius: 16,
-    paddingHorizontal: 16,
+    backgroundColor: colors.surfaceContainerLow,
+    overflow: 'hidden',
+  },
+  amountPrefix: {
     fontFamily: 'Manrope_700Bold',
     fontSize: 20,
     fontWeight: '700',
     color: colors.onSurface,
-    backgroundColor: colors.surfaceContainerLow,
+    paddingLeft: 16,
+    paddingRight: 4,
+  },
+  amountInput: {
+    flex: 1,
+    minHeight: 52,
+    paddingVertical: 12,
+    paddingRight: 16,
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.onSurface,
+    backgroundColor: 'transparent',
   },
   primaryBtn: {
     minHeight: 54,

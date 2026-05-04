@@ -53,13 +53,33 @@ SUMMARY_LABEL_ADJECTIVES_RE = re.compile(
 )
 
 
+# Mandatory venue surcharges: % fee lines, service charge, facility fee, etc.
+# (Discretionary tips map to `tip`, not here.)
+EXTRA_FEE_FUZZY_RE = re.compile(
+    r"\b(?:"
+    r"\d+\s*%\s*fee|"
+    r"service\s+(?:charge|fee)|"
+    r"facility\s+fee|"
+    r"kitchen\s+fee|"
+    r"health\s+(?:fee|surcharge)|"
+    r"mandatory\s+fee|"
+    r"venue\s+fee|"
+    r"(?:service|facility)\s+surcharge|"
+    r"(?:cover|seating)\s+(?:charge|fee)|"
+    r"\bsurcharge\b"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def is_totals_row(text: str) -> bool:
-    """True if `text` looks like a subtotal / tax / total / balance-due row."""
+    """True if `text` looks like a subtotal / tax / total / balance-due / fee row."""
     return bool(
         SUBTOTAL_FUZZY_RE.search(text)
         or TOTAL_FUZZY_RE.search(text)
         or TAX_FUZZY_RE.search(text)
         or BALANCE_DUE_RE.search(text)
+        or EXTRA_FEE_FUZZY_RE.search(text)
     )
 
 
@@ -82,5 +102,6 @@ def is_label_like(name: str) -> bool:
         or TOTAL_FUZZY_RE.search(name)
         or TAX_FUZZY_RE.search(name)
         or BALANCE_DUE_RE.search(name)
+        or EXTRA_FEE_FUZZY_RE.search(name)
         or SUMMARY_LABEL_ADJECTIVES_RE.search(name)
     )

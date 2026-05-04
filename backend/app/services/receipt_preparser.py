@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 
 from app.services.receipt_patterns import (
     BALANCE_DUE_RE,
+    EXTRA_FEE_FUZZY_RE,
     SUBTOTAL_FUZZY_RE,
     TAX_FUZZY_RE,
     TOTAL_FUZZY_RE,
@@ -49,6 +50,7 @@ def _is_totals_row(row_text: str) -> bool:
         or SUBTOTAL_WORD_RE.search(row_text)
         or TAX_WORD_RE.search(row_text)
         or BALANCE_DUE_RE.search(row_text)
+        or EXTRA_FEE_FUZZY_RE.search(row_text)
     )
 
 
@@ -116,6 +118,7 @@ def parse_structured_rows(rows: list[list[str]]) -> dict:
     items: list[PreparsedItem] = []
     subtotal: Decimal | None = None
     tax: Decimal | None = None
+    extra_fees: Decimal | None = None
     total: Decimal | None = None
 
     total_rows = 0
@@ -141,6 +144,8 @@ def parse_structured_rows(rows: list[list[str]]) -> dict:
             # "balance due" shouldn't overwrite an already-captured subtotal.
             if TAX_WORD_RE.search(row_text):
                 tax = price
+            elif EXTRA_FEE_FUZZY_RE.search(row_text):
+                extra_fees = (extra_fees or Decimal("0.00")) + price
             elif SUBTOTAL_WORD_RE.search(row_text):
                 subtotal = price
             elif BALANCE_DUE_RE.search(row_text):
@@ -194,12 +199,18 @@ def parse_structured_rows(rows: list[list[str]]) -> dict:
     if subtotal is None and sum_items > 0:
         subtotal = sum_items
 
-    totals_available = int(subtotal is not None) + int(tax is not None) + int(total is not None)
+    totals_available = (
+        int(subtotal is not None)
+        + int(tax is not None)
+        + int(total is not None)
+        + int(extra_fees is not None and extra_fees > 0)
+    )
     coverage = (parsed_item_rows / max(total_rows, 1)) if total_rows else 0.0
 
     consistency = 0.0
+    extras = extra_fees or Decimal("0.00")
     if subtotal is not None and tax is not None and total is not None:
-        expected = (subtotal + tax).quantize(Decimal("0.01"))
+        expected = (subtotal + tax + extras).quantize(Decimal("0.01"))
         diff = abs(expected - total)
         consistency = 1.0 if diff <= Decimal("0.02") else 0.0
     elif subtotal is not None and total is not None:
@@ -211,7 +222,7 @@ def parse_structured_rows(rows: list[list[str]]) -> dict:
     # Confidence heuristic: prioritize totals consistency, then row coverage, then having totals at all.
     confidence = min(
         1.0,
-        (0.55 * consistency) + (0.30 * coverage) + (0.15 * (totals_available / 3.0)),
+        (0.55 * consistency) + (0.30 * coverage) + (0.15 * (totals_available / 4.0)),
     )
 
     return {
@@ -228,6 +239,7 @@ def parse_structured_rows(rows: list[list[str]]) -> dict:
         "totals": {
             "subtotal": float(subtotal) if subtotal is not None else None,
             "tax": float(tax) if tax is not None else None,
+            "receipt_extra_fees": float(extra_fees) if extra_fees is not None else None,
             "total": float(total) if total is not None else None,
         },
         "confidence": float(confidence),

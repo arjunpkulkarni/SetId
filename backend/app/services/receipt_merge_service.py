@@ -47,7 +47,8 @@ def merge_intermediate_parses(
 ) -> tuple[CleanupReceiptPayload, list[str]]:
     """
     intermediates: each dict has keys:
-      items (list of dicts), subtotal, tax, tip, total, merchant_name, confidence, source_image_index
+      items (list of dicts), subtotal, tax, receipt_extra_fees, tip, total,
+      merchant_name, confidence, source_image_index
     Returns merged CleanupReceiptPayload and additional warnings.
     """
     merge_warnings = merge_warnings if merge_warnings is not None else []
@@ -90,6 +91,7 @@ def merge_intermediate_parses(
     # Prefer explicit footer totals from the last image; otherwise derive from merged line items.
     subtotal = _to_decimal(last.get("subtotal"))
     tax = _to_decimal(last.get("tax"))
+    extra_fees = _to_decimal(last.get("receipt_extra_fees"))
     tip = _to_decimal(last.get("tip"))
     total = _to_decimal(last.get("total"))
     if subtotal is None:
@@ -97,11 +99,15 @@ def merge_intermediate_parses(
         merge_warnings.append("Subtotal derived from merged items")
     if tax is None:
         tax = Decimal("0.00")
+    if extra_fees is None:
+        extra_fees = Decimal("0.00")
     if tip is None:
         tip = Decimal("0.00")
     if total is None:
-        total = (subtotal + tax + tip).quantize(MONEY_Q)
-        merge_warnings.append("Total derived from merged subtotal, tax, and tip")
+        total = (subtotal + tax + extra_fees + tip).quantize(MONEY_Q)
+        merge_warnings.append(
+            "Total derived from merged subtotal, tax, receipt extra fees, and tip"
+        )
 
     confidences: list[Decimal] = []
     for inter in intermediates:
@@ -121,6 +127,7 @@ def merge_intermediate_parses(
             "merchant_name": merchant,
             "subtotal": float(subtotal) if subtotal is not None else None,
             "tax": float(tax) if tax is not None else None,
+            "receipt_extra_fees": float(extra_fees) if extra_fees is not None else None,
             "tip": float(tip) if tip is not None else None,
             "total": float(total) if total is not None else None,
             "items": [it.model_dump() for it in merged_cleanup_items],

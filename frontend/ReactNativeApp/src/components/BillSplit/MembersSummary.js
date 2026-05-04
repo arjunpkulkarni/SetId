@@ -40,7 +40,7 @@ export function MembersSummary({ members, serverAssignments, bill }) {
               <Text style={styles.memberName}>{m.nickname}</Text>
               <Text style={styles.memberItemCount}>
                 {m.itemCount} {m.itemCount === 1 ? 'Item' : 'Items'}
-                {m.overheadShare > 0 ? ` · incl. ${formatCurrency(m.overheadShare)} tax/tip` : ''}
+                {m.overheadShare > 0 ? ` · incl. ${formatCurrency(m.overheadShare)} tax, fees & tip` : ''}
               </Text>
             </View>
           </View>

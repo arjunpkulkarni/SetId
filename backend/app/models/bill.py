@@ -32,6 +32,9 @@ class Bill(Base):
     service_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     service_fee_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     service_fee_percentage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    # Mandatory venue surcharges from the receipt (e.g. "16% fee", service charge,
+    # facility fee) — distinct from Settld platform `service_fee`.
+    receipt_extra_fees: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

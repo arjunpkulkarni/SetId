@@ -31,6 +31,7 @@ from app.services.receipt_item_normalizer import normalize_cleanup_payload
 # through one layer and show up as phantom line items.
 from app.services.receipt_patterns import (
     BALANCE_DUE_RE,
+    EXTRA_FEE_FUZZY_RE,
     SUBTOTAL_FUZZY_RE,
     TAX_FUZZY_RE,
     TOTAL_FUZZY_RE,
@@ -57,7 +58,7 @@ NON_ITEM_PATTERNS = (
     re.compile(r"\bauth\b", re.IGNORECASE),
     re.compile(r"\btip\b", re.IGNORECASE),
     re.compile(r"\bgratuity\b", re.IGNORECASE),
-    re.compile(r"\bservice\s+(?:charge|fee)\b", re.IGNORECASE),
+    EXTRA_FEE_FUZZY_RE,
     re.compile(r"\bchange(?:\s+due)?\b", re.IGNORECASE),
     re.compile(r"\bapproval\b", re.IGNORECASE),
     # Summary anchors (fuzzy, catches misspellings + compound labels).
@@ -136,16 +137,19 @@ explanations.
 
 An "item" is a purchased product or dish. The `items` array must contain ONLY
 purchased items. If a line is any of the following, it is NOT an item — it either
-maps to a dedicated top-level field (`subtotal` / `tax` / `tip` / `total`) or is dropped
+maps to a dedicated top-level field (`subtotal` / `tax` / `receipt_extra_fees` / `tip` / `total`) or is dropped
 entirely:
 
   - subtotal, sub-total, sub total, subttl, subtoal, running subtotal, complete subtotal
   - total, grand total, net total, running total, total due
   - balance due, amount due, amount owed, amt due, pay this amount, to pay, please pay, charge
-  - tax, sales tax, vat, gst, hst
+  - tax, sales tax, state tax, vat, gst, hst
+  - Mandatory venue surcharges and fees (NOT optional gratuity): percent fees such as "16% Fee",
+    "service charge", "facility fee", "kitchen fee", "health surcharge", "mandatory fee",
+    "venue fee", "surcharge", "cover charge", etc. Map the dollar amount to `receipt_extra_fees`
+    (sum multiple such lines into one total if there are several).
   - tip, gratuity — map ONLY optional customer gratuity lines labeled tip/gratuity/add tip/suggested tip to `tip`.
-    Do NOT map mandatory service charges, kitchen fees, health mandates, SF surcharges, or generic "service fee"
-    lines to `tip` (leave `tip` null unless it is clearly a discretionary gratuity).
+    Do NOT map mandatory venue fees to `tip`; those belong in `receipt_extra_fees`.
   - change, change due, cash, credit, debit, card, visa, mastercard, amex, discover
   - approval, auth, batch, trace, merchant id, terminal id
   - addresses, phone numbers, dates, timestamps, "thank you" messages, loyalty codes
@@ -175,6 +179,7 @@ Correct output:
     "merchant_name": null,
     "subtotal": 26.99,
     "tax": 3.17,
+    "receipt_extra_fees": null,
     "tip": 5.00,
     "total": 35.16,
     "items": [
@@ -183,8 +188,13 @@ Correct output:
     "confidence": 0.9
   }
 
-Notice: the COMPLETE SUBTOTAL and SUBTOTAL lines do NOT appear in `items` even
-though they share a price with a real item. They are summary labels.
+Example with a venue percent fee (no optional tip):
+  SUBTOTAL\t103.75
+  16% FEE\t16.60
+  STATE TAX\t11.43
+  TOTAL DUE\t131.78
+
+Correct output includes `"receipt_extra_fees": 16.60`, `"tip": null`, items only the food lines.
 """.strip()
 
 CLEANUP_RESPONSE_FORMAT = {
@@ -207,6 +217,9 @@ CLEANUP_RESPONSE_FORMAT = {
                     "type": ["number", "null"],
                 },
                 "tax": {
+                    "type": ["number", "null"],
+                },
+                "receipt_extra_fees": {
                     "type": ["number", "null"],
                 },
                 "tip": {
@@ -332,6 +345,7 @@ class CleanupReceiptPayload(BaseModel):
     merchant_name: str | None = None
     subtotal: Decimal | None = None
     tax: Decimal | None = None
+    receipt_extra_fees: Decimal | None = None
     tip: Decimal | None = None
     total: Decimal | None = None
     items: list[CleanupReceiptItem] = Field(default_factory=list)
@@ -343,7 +357,7 @@ class CleanupReceiptPayload(BaseModel):
         cleaned = " ".join(str(value or "").split()).strip()
         return cleaned or None
 
-    @field_validator("subtotal", "tax", "tip", "total", mode="before")
+    @field_validator("subtotal", "tax", "receipt_extra_fees", "tip", "total", mode="before")
     @classmethod
     def validate_optional_money(cls, value: object) -> Decimal | None:
         return _coerce_decimal(value)
@@ -990,6 +1004,7 @@ class ReceiptParserService:
             bill.tax = Decimal("0.00")
             bill.tip = Decimal("0.00")
             bill.tip_split_mode = "proportional"
+            bill.receipt_extra_fees = Decimal("0.00")
             bill.total = Decimal("0.00")
             bill.merchant_name = None
 
@@ -1232,6 +1247,7 @@ class ReceiptParserService:
                 "merchant_name": None,
                 "subtotal": preparsed.get("totals", {}).get("subtotal"),
                 "tax": preparsed.get("totals", {}).get("tax"),
+                "receipt_extra_fees": preparsed.get("totals", {}).get("receipt_extra_fees"),
                 "tip": preparsed.get("totals", {}).get("tip"),
                 "total": preparsed.get("totals", {}).get("total"),
                 "items": [
@@ -1318,6 +1334,7 @@ class ReceiptParserService:
             tax=cleaned.tax,
             total=cleaned.total,
             tip=cleaned.tip,
+            receipt_extra_fees=cleaned.receipt_extra_fees,
             llm_confidence=cleaned.confidence,
             rows=rows,
         )
@@ -1391,6 +1408,10 @@ class ReceiptParserService:
         if cleaned.tax is None:
             warnings.append("Tax was not detected; defaulted to 0.")
 
+        extra_fees = validated["receipt_extra_fees"]
+        if cleaned.receipt_extra_fees is None:
+            warnings.append("Receipt extra fees (venue surcharge) were not detected; defaulted to 0.")
+
         tip = validated["tip"]
         if cleaned.tip is None:
             warnings.append("Tip was not detected; defaulted to 0.")
@@ -1401,6 +1422,7 @@ class ReceiptParserService:
         if bill:
             bill.subtotal = subtotal
             bill.tax = tax
+            bill.receipt_extra_fees = extra_fees
             bill.tip = tip
             bill.tip_split_mode = "proportional"
             bill.total = total
@@ -1417,12 +1439,13 @@ class ReceiptParserService:
 
         self.db.commit()
         logger.info(
-            "receipt_parse_persisted bill_id=%s receipt_id=%s item_count=%s subtotal=%s tax=%s tip=%s total=%s confidence=%s warnings=%s",
+            "receipt_parse_persisted bill_id=%s receipt_id=%s item_count=%s subtotal=%s tax=%s receipt_extra_fees=%s tip=%s total=%s confidence=%s warnings=%s",
             bill_id,
             receipt.id,
             len(parsed_items),
             subtotal,
             tax,
+            extra_fees,
             tip,
             total,
             validated["overall_confidence"],
@@ -1433,6 +1456,7 @@ class ReceiptParserService:
             subtotal=subtotal,
             items=parsed_items,
             tax=tax,
+            receipt_extra_fees=extra_fees,
             tip=tip,
             total=total,
             pipeline_version=RECEIPT_PIPELINE_VERSION,
@@ -1466,6 +1490,7 @@ class ReceiptParserService:
                 for item in items
             ],
             tax=bill.tax,
+            receipt_extra_fees=bill.receipt_extra_fees or Decimal("0.00"),
             tip=bill.tip or Decimal("0.00"),
             total=bill.total,
             pipeline_version=receipt.parsed_version if receipt else None,
@@ -1603,6 +1628,7 @@ class ReceiptParserService:
             subtotal
             + (bill.tax or Decimal("0.00"))
             + (bill.tip or Decimal("0.00"))
+            + (bill.receipt_extra_fees or Decimal("0.00"))
             + (bill.service_fee or Decimal("0.00"))
         ).quantize(MONEY_QUANTIZE)
 

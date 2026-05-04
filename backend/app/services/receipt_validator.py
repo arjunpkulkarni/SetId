@@ -94,6 +94,7 @@ def validate_parsed_receipt(
     llm_confidence,
     rows: list[list[str]] | None,
     tip=None,
+    receipt_extra_fees=None,
 ) -> dict:
     warnings: list[str] = []
     normalized_items: list[dict] = []
@@ -102,6 +103,7 @@ def validate_parsed_receipt(
     subtotal_dec = _to_decimal(subtotal)
     tax_dec = _to_decimal(tax) or Decimal("0.00")
     tip_dec = _to_decimal(tip) or Decimal("0.00")
+    extra_fees_dec = _to_decimal(receipt_extra_fees) or Decimal("0.00")
     total_dec = _to_decimal(total)
 
     row_lookup = {" ".join(row).strip().lower(): row for row in rows if row}
@@ -163,15 +165,15 @@ def validate_parsed_receipt(
         warnings.append("Mismatch between subtotal and sum of items")
 
     if total_dec is None:
-        total_dec = _quantize(subtotal_dec + tax_dec + tip_dec)
-        warnings.append("Total derived from subtotal, tax, and tip")
-    elif abs(_quantize(subtotal_dec + tax_dec + tip_dec) - total_dec) > TOLERANCE:
+        total_dec = _quantize(subtotal_dec + tax_dec + tip_dec + extra_fees_dec)
+        warnings.append("Total derived from subtotal, tax, tip, and receipt extra fees")
+    elif abs(_quantize(subtotal_dec + tax_dec + tip_dec + extra_fees_dec) - total_dec) > TOLERANCE:
         warnings.append("Mismatch between total and computed sum")
 
     # Model often invents a small tip or mislabels a surcharge as gratuity. If the
     # printed total equals subtotal + tax only, there is no room for tip on the receipt.
     if total_dec is not None and subtotal_dec is not None and tip_dec > 0:
-        sum_without_tip = _quantize(subtotal_dec + tax_dec)
+        sum_without_tip = _quantize(subtotal_dec + tax_dec + extra_fees_dec)
         if abs(total_dec - sum_without_tip) <= TOLERANCE:
             tip_dec = Decimal("0.00")
             warnings.append("Tip omitted; receipt total matches subtotal plus tax only")
@@ -189,6 +191,7 @@ def validate_parsed_receipt(
         "subtotal": subtotal_dec,
         "tax": tax_dec,
         "tip": tip_dec,
+        "receipt_extra_fees": extra_fees_dec,
         "total": total_dec,
         "overall_confidence": overall_confidence,
         "warnings": warnings,

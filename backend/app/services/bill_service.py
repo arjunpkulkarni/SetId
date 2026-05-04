@@ -98,12 +98,13 @@ class BillService:
             if hasattr(bill, key):
                 setattr(bill, key, value)
 
-        financial_fields = {"subtotal", "tax", "tip", "service_fee"}
+        financial_fields = {"subtotal", "tax", "tip", "service_fee", "receipt_extra_fees"}
         if financial_fields.intersection(data) and "total" not in data:
             bill.total = (
                 (bill.subtotal or Decimal("0.00"))
                 + (bill.tax or Decimal("0.00"))
                 + (bill.tip or Decimal("0.00"))
+                + (bill.receipt_extra_fees or Decimal("0.00"))
                 + (bill.service_fee or Decimal("0.00"))
             )
 

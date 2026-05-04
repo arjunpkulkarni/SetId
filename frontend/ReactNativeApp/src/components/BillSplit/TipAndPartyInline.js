@@ -221,15 +221,18 @@ export function TipAndPartyInline({ bill, billId, onSaved }) {
           {tipMode && tipMode !== 'no_tip' ? (
             <View style={styles.amountWrap}>
               <Text style={styles.amountLabel}>Tip amount</Text>
-              <TextInput
-                value={tipInput}
-                onChangeText={(v) => setTipInput(cleanMoneyText(v))}
-                keyboardType="decimal-pad"
-                inputAccessoryViewID={Platform.OS === 'ios' ? TIP_ACCESSORY_ID : undefined}
-                placeholder="0.00"
-                placeholderTextColor={colors.outline}
-                style={styles.amountInput}
-              />
+              <View style={styles.amountInputOuter}>
+                <Text style={styles.amountPrefix}>$</Text>
+                <TextInput
+                  value={tipInput}
+                  onChangeText={(v) => setTipInput(cleanMoneyText(v))}
+                  keyboardType="decimal-pad"
+                  inputAccessoryViewID={Platform.OS === 'ios' ? TIP_ACCESSORY_ID : undefined}
+                  placeholder="0.00"
+                  placeholderTextColor={colors.outline}
+                  style={styles.amountInput}
+                />
+              </View>
             </View>
           ) : null}
 
@@ -389,17 +392,34 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     marginBottom: 6,
   },
-  amountInput: {
+  amountInputOuter: {
+    flexDirection: 'row',
+    alignItems: 'center',
     minHeight: 48,
     borderWidth: 1,
     borderColor: colors.outlineVariant,
     borderRadius: radii.lg,
-    paddingHorizontal: 14,
+    backgroundColor: colors.surfaceContainerLowest,
+    overflow: 'hidden',
+  },
+  amountPrefix: {
     fontFamily: 'Manrope_700Bold',
     fontSize: 18,
     fontWeight: '700',
     color: colors.onSurface,
-    backgroundColor: colors.surfaceContainerLowest,
+    paddingLeft: 14,
+    paddingRight: 4,
+  },
+  amountInput: {
+    flex: 1,
+    minHeight: 48,
+    paddingVertical: 10,
+    paddingRight: 14,
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.onSurface,
+    backgroundColor: 'transparent',
   },
   stepperRow: {
     flexDirection: 'row',

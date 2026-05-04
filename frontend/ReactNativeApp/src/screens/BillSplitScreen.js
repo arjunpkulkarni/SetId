@@ -840,17 +840,20 @@ export default function BillSplitScreen({ navigation, route }) {
                 {tipMode && tipMode !== 'no_tip' && (
                   <View style={styles.tipAmountWrap}>
                     <Text style={styles.tipAmountLabel}>Tip amount</Text>
-                    <TextInput
-                      value={tipInput}
-                      onChangeText={(value) => setTipInput(cleanMoneyText(value))}
-                      keyboardType="decimal-pad"
-                      inputAccessoryViewID={
-                        Platform.OS === 'ios' ? TIP_AMOUNT_INPUT_ACCESSORY_ID : undefined
-                      }
-                      placeholder="0.00"
-                      placeholderTextColor={colors.outline}
-                      style={styles.tipAmountInput}
-                    />
+                    <View style={styles.tipAmountInputOuter}>
+                      <Text style={styles.tipAmountPrefix}>$</Text>
+                      <TextInput
+                        value={tipInput}
+                        onChangeText={(value) => setTipInput(cleanMoneyText(value))}
+                        keyboardType="decimal-pad"
+                        inputAccessoryViewID={
+                          Platform.OS === 'ios' ? TIP_AMOUNT_INPUT_ACCESSORY_ID : undefined
+                        }
+                        placeholder="0.00"
+                        placeholderTextColor={colors.outline}
+                        style={styles.tipAmountInput}
+                      />
+                    </View>
                   </View>
                 )}
 
@@ -1089,17 +1092,34 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     marginBottom: 8,
   },
-  tipAmountInput: {
+  tipAmountInputOuter: {
+    flexDirection: 'row',
+    alignItems: 'center',
     minHeight: 52,
     borderWidth: 1,
     borderColor: colors.outlineVariant,
     borderRadius: 16,
-    paddingHorizontal: 16,
+    backgroundColor: colors.surfaceContainerLow,
+    overflow: 'hidden',
+  },
+  tipAmountPrefix: {
     fontFamily: 'Manrope_700Bold',
     fontSize: 20,
     fontWeight: '700',
     color: colors.onSurface,
-    backgroundColor: colors.surfaceContainerLow,
+    paddingLeft: 16,
+    paddingRight: 4,
+  },
+  tipAmountInput: {
+    flex: 1,
+    minHeight: 52,
+    paddingVertical: 12,
+    paddingRight: 16,
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.onSurface,
+    backgroundColor: 'transparent',
   },
   tipConfirmButton: {
     minHeight: 54,

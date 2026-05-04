@@ -90,6 +90,7 @@ export function BottomActions({
         subtotal: mine.subtotal,
         taxShare: mine.taxShare,
         tipShare: mine.tipShare,
+        feeShare: mine.feeShare,
         total: mine.total,
         mode: 'host',
       };
@@ -109,7 +110,11 @@ export function BottomActions({
       billSubtotal > 0 ? Math.min(1, assignedSubtotal / billSubtotal) : 0;
     const taxShare = roundMoney(billTax * proportion);
     const tipShare = roundMoney(billTip * proportion);
-    const total = roundMoney(assignedSubtotal + taxShare + tipShare);
+    const receiptExtra = parsePriceValue(bill?.receipt_extra_fees ?? 0);
+    const platformFee = parsePriceValue(bill?.service_fee ?? 0);
+    const billCombinedFees = receiptExtra + platformFee;
+    const feeShare = roundMoney(billCombinedFees * proportion);
+    const total = roundMoney(assignedSubtotal + taxShare + tipShare + feeShare);
 
     const itemRows = items
       .filter((i) => (assignmentMap[i.id] || []).length > 0)
@@ -130,6 +135,7 @@ export function BottomActions({
       subtotal: assignedSubtotal,
       taxShare,
       tipShare,
+      feeShare,
       total,
       mode: 'aggregate',
     };
@@ -144,9 +150,10 @@ export function BottomActions({
     partyN,
   ]);
 
-  const { itemRows, subtotal, taxShare, tipShare, total, mode } = breakdown;
+  const { itemRows, subtotal, taxShare, tipShare, feeShare, total, mode } = breakdown;
   const showTax = taxShare > 0;
   const showTip = tipShare > 0;
+  const showFee = feeShare > 0;
   const subtotalLabel =
     mode === 'host' ? 'Subtotal (your items)' : 'Subtotal (items)';
   const totalLabel = mode === 'host' ? 'Your total' : 'Total';
@@ -216,6 +223,12 @@ export function BottomActions({
         <View style={styles.breakdownRow}>
           <Text style={styles.breakdownLabel}>Tip (your share)</Text>
           <Text style={styles.breakdownValue}>{formatCurrency(tipShare)}</Text>
+        </View>
+      ) : null}
+      {showFee ? (
+        <View style={styles.breakdownRow}>
+          <Text style={styles.breakdownLabel}>Fees (your share)</Text>
+          <Text style={styles.breakdownValue}>{formatCurrency(feeShare)}</Text>
         </View>
       ) : null}
 

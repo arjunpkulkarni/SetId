@@ -23,6 +23,7 @@ class BillUpdate(BaseModel):
     tip: Decimal | None = None
     tip_split_mode: Literal["proportional", "no_tip"] | None = None
     service_fee: Decimal | None = None
+    receipt_extra_fees: Decimal | None = None
     total: Decimal | None = None
     notes: str | None = None
     status: str | None = None
@@ -52,6 +53,7 @@ class BillOut(BaseModel):
     service_fee: Decimal
     service_fee_type: str | None = None
     service_fee_percentage: Decimal | None = None
+    receipt_extra_fees: Decimal
     total: Decimal
     notes: str | None = None
     member_count: int = 0

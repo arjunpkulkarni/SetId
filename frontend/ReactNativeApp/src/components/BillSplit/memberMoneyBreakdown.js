@@ -27,7 +27,7 @@ export function effectiveBillSubtotal(bill, allAssignedSubtotal) {
 
 /**
  * Use stored `bill.tax` when present; otherwise infer from
- * `total - subtotal - tip - service_fee` when subtotal is known (covers stale/empty tax on the row).
+ * `total - subtotal - tip - service_fee - receipt_extra_fees` when subtotal is known (covers stale/empty tax on the row).
  */
 export function effectiveBillTax(bill, billSubtotalForResidual) {
   let t = parsePriceValue(bill?.tax);
@@ -35,8 +35,9 @@ export function effectiveBillTax(bill, billSubtotalForResidual) {
   if (!bill || billSubtotalForResidual <= 0) return 0;
   const total = parsePriceValue(bill.total);
   const tip = parsePriceValue(bill.tip ?? 0);
-  const fee = parsePriceValue(bill.service_fee ?? 0);
-  const implied = roundMoney(total - billSubtotalForResidual - tip - fee);
+  const platform = parsePriceValue(bill.service_fee ?? 0);
+  const extra = parsePriceValue(bill.receipt_extra_fees ?? 0);
+  const implied = roundMoney(total - billSubtotalForResidual - tip - platform - extra);
   if (implied > 0.005 && implied < total) return implied;
   return 0;
 }
@@ -69,25 +70,32 @@ export function computeMemberMoneyBreakdown(member, { serverAssignments, bill, h
   const billTax = effectiveBillTax(bill, subtotalForTaxResidual);
   const billTip =
     bill?.tip_split_mode === 'proportional' ? parsePriceValue(bill?.tip ?? 0) : 0;
+  const receiptExtra = parsePriceValue(bill?.receipt_extra_fees ?? 0);
+  const platformFee = parsePriceValue(bill?.service_fee ?? 0);
+  const billCombinedFees = receiptExtra + platformFee;
 
   const proportion = billSubtotal > 0 ? subtotal / billSubtotal : 0;
 
   let taxShare;
   let tipShare;
+  let feeShare;
   if (isHost) {
     // Item-weighted share of tax/tip so host sees the same "your portion of the
     // check" as on the receipt (collection logic on the server may differ).
     taxShare = billTax * proportion;
     tipShare = billTip * proportion;
+    feeShare = billCombinedFees * proportion;
   } else if (partyN && partyN > 0) {
     taxShare = billTax / partyN;
     tipShare = billTip * proportion;
+    feeShare = billCombinedFees * proportion;
   } else {
     taxShare = billTax * proportion;
     tipShare = billTip * proportion;
+    feeShare = billCombinedFees * proportion;
   }
 
-  const overheadShare = taxShare + tipShare;
+  const overheadShare = taxShare + tipShare + feeShare;
   const total = roundMoney(subtotal + overheadShare);
 
   return {
@@ -97,6 +105,7 @@ export function computeMemberMoneyBreakdown(member, { serverAssignments, bill, h
     itemCount,
     taxShare: roundMoney(taxShare),
     tipShare: roundMoney(tipShare),
+    feeShare: roundMoney(feeShare),
   };
 }
 
