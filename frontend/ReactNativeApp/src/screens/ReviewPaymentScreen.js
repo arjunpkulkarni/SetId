@@ -21,6 +21,11 @@ import {
   payments as paymentsApi,
   members as membersApi,
 } from '../services/api';
+import {
+  computeMemberMoneyBreakdown,
+  resolveHostUserId,
+  resolvePartyN,
+} from '../components/BillSplit/memberMoneyBreakdown';
 
 function formatMoney(n) {
   const x = typeof n === 'string' ? parseFloat(n) : Number(n);
@@ -111,7 +116,13 @@ function ParticipantRow({ participant }) {
         </View>
       </View>
       <View style={styles.participantRight}>
-        <Text style={styles.participantAmount}>{formatMoney(participant.amountOwed)}</Text>
+        <Text style={styles.participantAmount}>
+          {formatMoney(
+            participant.status === 'paid'
+              ? 0
+              : (participant.amountPending ?? participant.amountOwed ?? 0),
+          )}
+        </Text>
         <View style={styles.statusBadge}>
           <MaterialIcons name={statusCfg.icon} size={12} color={statusCfg.color} />
           <Text style={[styles.statusText, { color: statusCfg.color }]}>
@@ -179,27 +190,16 @@ export default function ReviewPaymentScreen({ navigation, route }) {
 
       const uid = String(user?.id ?? '');
       const totalBill = parseFloat(b?.total ?? 0);
-      const allItemsSubtotal = allAssignments.reduce(
-        (s, a) => s + parseFloat(a.amount_owed ?? 0), 0,
-      );
-      const billSubtotal = parseFloat(b?.subtotal ?? allItemsSubtotal);
-      const billTax = parseFloat(b?.tax ?? 0);
-      const billTip = b?.tip_split_mode === 'proportional'
-        ? parseFloat(b?.tip ?? 0)
-        : 0;
+      const hostUserId = resolveHostUserId(b);
+      const partyN = resolvePartyN(b);
 
       const allMemberData = mems.map((m) => {
-        const mAssignments = allAssignments.filter(
-          (a) => String(a.bill_member_id) === String(m.id),
-        );
-        const itemSubtotal = mAssignments.reduce(
-          (s, a) => s + parseFloat(a.amount_owed ?? 0),
-          0,
-        );
-        const proportion = billSubtotal > 0 ? itemSubtotal / billSubtotal : 0;
-        const taxShare = billTax * proportion;
-        const tipShare = billTip * proportion;
-        const amountOwed = Math.round((itemSubtotal + taxShare + tipShare) * 100) / 100;
+        const { total: amountOwed } = computeMemberMoneyBreakdown(m, {
+          serverAssignments: allAssignments,
+          bill: b,
+          hostUserId,
+          partyN,
+        });
 
         const mPayments = allPayments.filter(
           (p) => String(p.bill_member_id) === String(m.id) && p.status === 'succeeded',
@@ -211,6 +211,9 @@ export default function ReviewPaymentScreen({ navigation, route }) {
 
         const isHost = m.user_id != null && String(m.user_id) === uid;
 
+        const amountPending =
+          Math.round(Math.max(0, amountOwed - amountPaid) * 100) / 100;
+
         let status = 'pending';
         let subtitle = 'Pending request';
         if (amountPaid >= amountOwed && amountOwed > 0) {
@@ -219,12 +222,15 @@ export default function ReviewPaymentScreen({ navigation, route }) {
         } else if (m.marked_paid) {
           status = 'paid';
           subtitle = 'Marked as paid';
+        } else if (amountPaid > 0 && amountPending > 0) {
+          subtitle = `${formatMoney(amountPaid)} paid · ${formatMoney(amountPending)} left`;
         }
 
         return {
           ...m,
           amountOwed,
           amountPaid,
+          amountPending,
           status,
           subtitle,
           isHost,
@@ -232,8 +238,8 @@ export default function ReviewPaymentScreen({ navigation, route }) {
       });
 
       const nonHostMembers = allMemberData.filter((m) => !m.isHost);
-      const amountToCollect = nonHostMembers.reduce((sum, m) => sum + (m.amountOwed || 0), 0);
-      setHostShare(Math.max(0, totalBill - amountToCollect));
+      const guestFullOwed = nonHostMembers.reduce((s, m) => s + (m.amountOwed || 0), 0);
+      setHostShare(Math.max(0, totalBill - guestFullOwed));
       setParticipants(nonHostMembers);
     } catch (err) {
       console.error('[PaymentTracking] load error:', err);
@@ -267,7 +273,7 @@ export default function ReviewPaymentScreen({ navigation, route }) {
         setParticipants((prev) =>
           prev.map((p) =>
             String(p.id) === String(data.member_id)
-              ? { ...p, status: 'paid', subtitle: 'Paid via Settld' }
+              ? { ...p, status: 'paid', subtitle: 'Paid via Settld', amountPending: 0 }
               : p,
           ),
         );
@@ -322,7 +328,7 @@ export default function ReviewPaymentScreen({ navigation, route }) {
             setParticipants((prev) =>
               prev.map((pp) =>
                 pp.id === p.id
-                  ? { ...pp, status: 'paid', subtitle: 'Marked as paid (cash)' }
+                  ? { ...pp, status: 'paid', subtitle: 'Marked as paid (cash)', amountPending: 0 }
                   : pp,
               ),
             );
