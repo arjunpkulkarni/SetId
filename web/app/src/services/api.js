@@ -90,6 +90,15 @@ export const buildPartyWsUrl = (inviteToken) => {
 export const getPaymentDetails = async (token) => {
   const res = await fetch(`${API_BASE_URL}/pay/${token}`);
   if (res.status === 410) return { token_expired: true };
+  if (res.status === 403) {
+    const body = await res.json().catch(() => ({}));
+    if (body?.error?.code === 'PAYMENTS_LOCKED') {
+      return {
+        payments_locked: true,
+        lock_message: body?.error?.message || 'The host has not opened payments yet.',
+      };
+    }
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     if (body?.error?.code === 'TOKEN_EXPIRED') return { token_expired: true };

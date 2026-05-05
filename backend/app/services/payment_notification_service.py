@@ -46,6 +46,13 @@ class PaymentNotificationService:
         if str(bill.owner_id) != str(actor_user_id):
             raise ValueError("FORBIDDEN")
 
+        from app.services.guest_pay_gate import assert_guest_payment_allowed
+
+        try:
+            assert_guest_payment_allowed(bill)
+        except ValueError:
+            raise ValueError("GUEST_PAY_LOCKED") from None
+
         calc = CalculationService(self.db)
         try:
             breakdown = calc.get_balance_breakdown(bill_id)

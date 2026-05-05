@@ -7,12 +7,22 @@ export default function ErrorPage() {
   const type = state?.type;
   const message = state?.message;
 
+  const isLocked = type === 'locked';
+
   const isExpired = type === 'expired' || (message && message.toLowerCase().includes('expired'));
   const isPaid = type === 'paid' || (message && message.toLowerCase().includes('paid'));
 
   let icon, title, desc, infoTitle, infoDesc, circleClass, titleClass;
 
-  if (isExpired) {
+  if (isLocked) {
+    icon = '🔒';
+    title = 'Payments Not Open Yet';
+    desc = message || 'The host has not opened payments for this bill. Finish picking your items; they will notify you when it is time to pay.';
+    infoTitle = 'Why am I seeing this?';
+    infoDesc = 'The bill owner controls when guests can check out so everyone can split items first.';
+    circleClass = 'expired';
+    titleClass = '';
+  } else if (isExpired) {
     icon = '⏰';
     title = 'Link Expired';
     desc = 'This payment link has expired. Ask the bill owner to resend your invite to get a new link.';

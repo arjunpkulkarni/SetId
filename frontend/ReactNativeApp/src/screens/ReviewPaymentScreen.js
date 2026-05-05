@@ -20,6 +20,7 @@ import {
   assignments as assignmentsApi,
   payments as paymentsApi,
   members as membersApi,
+  ApiError,
 } from '../services/api';
 
 function formatMoney(n) {
@@ -151,6 +152,7 @@ export default function ReviewPaymentScreen({ navigation, route }) {
   const [participants, setParticipants] = useState([]);
   const [hostShare, setHostShare] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [unlockBusy, setUnlockBusy] = useState(false);
 
   const load = useCallback(async (isBackgroundRefresh = false) => {
     if (!billId) return;
@@ -293,13 +295,6 @@ export default function ReviewPaymentScreen({ navigation, route }) {
     return () => clearInterval(poll);
   }, [wsConnected, load]);
 
-  const totalBill = parseFloat(bill?.total ?? 0);
-  // The host paid upfront — collect only what non-host members owe.
-  const amountToCollect = participants.reduce((s, p) => s + (p.amountOwed || 0), 0);
-  const totalCollected = participants.reduce((s, p) => s + (p.amountPaid || 0), 0);
-  const totalRemaining = Math.max(0, amountToCollect - totalCollected);
-  const percent = amountToCollect > 0 ? Math.round((totalCollected / amountToCollect) * 100) : 0;
-
   const handleMarkPaid = () => {
     const unpaid = participants.filter((p) => p.status !== 'paid');
     if (unpaid.length === 0) {
@@ -354,6 +349,75 @@ export default function ReviewPaymentScreen({ navigation, route }) {
 
   const billTitle = bill.merchant_name || bill.title || 'Bill';
   const memberCount = participants.length;
+  const guestPayUnlocked = bill.guest_pay_unlocked !== false;
+
+  const totalBill = parseFloat(bill?.total ?? 0);
+  const amountToCollect = participants.reduce((s, p) => s + (p.amountOwed || 0), 0);
+  const totalCollected = participants.reduce((s, p) => s + (p.amountPaid || 0), 0);
+  const totalRemaining = Math.max(0, amountToCollect - totalCollected);
+  const percent = amountToCollect > 0 ? Math.round((totalCollected / amountToCollect) * 100) : 0;
+
+  const runUnlockGuestPay = async (force) => {
+    if (!billId) return;
+    setUnlockBusy(true);
+    try {
+      await billsApi.unlockGuestPayments(billId, { force });
+      await load(true);
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : null;
+      if (code === 'ASSIGNMENTS_INCOMPLETE' && !force) {
+        Alert.alert(
+          'Items not fully assigned',
+          'Every receipt line should be assigned before guests pay. Open payments anyway?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Open anyway',
+              style: 'destructive',
+              onPress: () => runUnlockGuestPay(true),
+            },
+          ],
+        );
+      } else {
+        Alert.alert('Could not open payments', err?.message ?? 'Try again.');
+      }
+    } finally {
+      setUnlockBusy(false);
+    }
+  };
+
+  const promptUnlockGuestPay = () => {
+    Alert.alert(
+      'Allow guest payments?',
+      'Guests can check out and use SMS pay links only after you confirm everyone has picked their items.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Allow payments', onPress: () => runUnlockGuestPay(false) },
+      ],
+    );
+  };
+
+  const promptLockGuestPay = () => {
+    Alert.alert(
+      'Pause guest payments?',
+      'Guests will not be able to start new checkouts until you allow payments again. In-flight payments may still complete.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Pause',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await billsApi.lockGuestPayments(billId);
+              await load(true);
+            } catch (err) {
+              Alert.alert('Could not pause', err?.message ?? 'Try again.');
+            }
+          },
+        },
+      ],
+    );
+  };
 
   return (
     <View style={styles.root}>
@@ -387,6 +451,45 @@ export default function ReviewPaymentScreen({ navigation, route }) {
             <Text style={styles.billTotal}>{formatMoney(amountToCollect)}</Text>
             <Text style={styles.billTotalLabel}>TO COLLECT</Text>
           </View>
+        </View>
+
+        <View style={[styles.guestPayCard, !guestPayUnlocked && styles.guestPayCardMuted]}>
+          <MaterialIcons
+            name={guestPayUnlocked ? 'lock-open' : 'lock'}
+            size={22}
+            color={colors.secondary}
+          />
+          <View style={styles.guestPayCopy}>
+            <Text style={styles.guestPayTitle}>
+              {guestPayUnlocked ? 'Guest payments open' : 'Guest payments locked'}
+            </Text>
+            <Text style={styles.guestPaySub}>
+              {guestPayUnlocked
+                ? 'Guests can pay their share. Pause if you need to fix items first.'
+                : 'When everyone has joined and picked items, allow payments so they can check out.'}
+            </Text>
+          </View>
+          {guestPayUnlocked ? (
+            <TouchableOpacity
+              onPress={promptLockGuestPay}
+              style={styles.guestPayBtnSecondary}
+              hitSlop={8}
+            >
+              <Text style={styles.guestPayBtnSecondaryText}>Pause</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={promptUnlockGuestPay}
+              disabled={unlockBusy}
+              style={[styles.guestPayBtn, unlockBusy && styles.guestPayBtnDisabled]}
+            >
+              {unlockBusy ? (
+                <ActivityIndicator color={colors.onSecondary} size="small" />
+              ) : (
+                <Text style={styles.guestPayBtnText}>Allow</Text>
+              )}
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Host's share callout */}
@@ -549,6 +652,65 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.onSurfaceVariant,
     marginTop: 2,
+  },
+
+  guestPayCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.secondaryContainer,
+    borderRadius: radii.xl,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+  },
+  guestPayCardMuted: {
+    backgroundColor: colors.surfaceContainerLow,
+  },
+  guestPayCopy: {
+    flex: 1,
+  },
+  guestPayTitle: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  guestPaySub: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+    marginTop: 4,
+    lineHeight: 16,
+  },
+  guestPayBtn: {
+    minWidth: 88,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: radii.full,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  guestPayBtnDisabled: {
+    opacity: 0.65,
+  },
+  guestPayBtnText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.onSecondary,
+  },
+  guestPayBtnSecondary: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  guestPayBtnSecondaryText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.secondary,
   },
 
   // Progress card

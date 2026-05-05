@@ -27,6 +27,15 @@ export default function PaymentPage() {
         navigate('/error', { state: { type: 'expired' } });
         return;
       }
+      if (data.payments_locked) {
+        navigate('/error', {
+          state: {
+            type: 'locked',
+            message: data.lock_message || 'The host has not opened payments yet.',
+          },
+        });
+        return;
+      }
       if (data.already_paid) {
         navigate('/error', { state: { type: 'paid' } });
         return;

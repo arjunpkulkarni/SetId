@@ -15,7 +15,7 @@ from app.models.bill_member import BillMember
 from app.models.receipt import ReceiptUpload
 from app.models.receipt_item import ReceiptItem
 from app.core.response import success_response, error_response
-from app.schemas.bill import BillCreate, BillUpdate, BillOut, BillActivity, ServiceFeeUpdate
+from app.schemas.bill import BillCreate, BillUpdate, BillOut, BillActivity, ServiceFeeUpdate, GuestPayUnlockRequest
 from app.schemas.bill_member import BillMemberOut
 from app.schemas.receipt import ReceiptItemOut
 from app.services.bill_service import BillService
@@ -23,6 +23,7 @@ from app.services.receipt_parser_service import ReceiptParserService
 from app.services.calculation_service import CalculationService
 from app.services.payment_service import PaymentService
 from app.services.payment_notification_service import PaymentNotificationService
+from app.services.guest_pay_gate import validate_unlock_assignments
 
 router = APIRouter(prefix="/bills", tags=["Bills"])
 
@@ -233,9 +234,93 @@ def send_payment_requests(
                 "Only the bill owner can send payment requests",
                 403,
             )
+        if code == "GUEST_PAY_LOCKED":
+            return error_response(
+                "PAYMENTS_LOCKED",
+                "Open guest payments on this bill before sending payment links (Bill → allow guests to pay).",
+                403,
+            )
         return error_response("ERROR", code, 400)
 
     return success_response(data=data, message="Payment requests processed")
+
+
+@router.post("/{bill_id}/guest-payments/unlock")
+def unlock_guest_payments(
+    bill_id: uuid.UUID,
+    body: GuestPayUnlockRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Owner: allow guests to complete checkout / use SMS pay links."""
+    from app.api.deps_bill import require_bill_owner
+
+    try:
+        require_bill_owner(db, str(bill_id), str(current_user.id))
+    except ValueError as e:
+        code = str(e)
+        if code == "NOT_FOUND":
+            return error_response("NOT_FOUND", "Bill not found", 404)
+        return error_response("FORBIDDEN", "Only the bill owner can open guest payments", 403)
+
+    bill = db.query(Bill).filter(Bill.id == bill_id).first()
+    if not bill:
+        return error_response("NOT_FOUND", "Bill not found", 404)
+
+    try:
+        validate_unlock_assignments(db, bill, force=body.force)
+    except ValueError as e:
+        if str(e) == "ASSIGNMENTS_INCOMPLETE":
+            return error_response(
+                "ASSIGNMENTS_INCOMPLETE",
+                "Every line item must be assigned before guests can pay, or set force=true to override.",
+                422,
+            )
+        return error_response("ERROR", str(e), 400)
+
+    bill.guest_pay_unlocked = True  # type: ignore[assignment]
+    db.commit()
+    db.refresh(bill)
+
+    real_members = [m for m in (bill.members or []) if m.status != "invite_link"]
+    bill.member_count = len(real_members)
+    return success_response(
+        data=BillOut.model_validate(bill).model_dump(),
+        message="Guests can now pay their shares",
+    )
+
+
+@router.post("/{bill_id}/guest-payments/lock")
+def lock_guest_payments(
+    bill_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Owner: block new guest checkouts (in-flight payments may still complete)."""
+    from app.api.deps_bill import require_bill_owner
+
+    try:
+        require_bill_owner(db, str(bill_id), str(current_user.id))
+    except ValueError as e:
+        code = str(e)
+        if code == "NOT_FOUND":
+            return error_response("NOT_FOUND", "Bill not found", 404)
+        return error_response("FORBIDDEN", "Only the bill owner can lock guest payments", 403)
+
+    bill = db.query(Bill).filter(Bill.id == bill_id).first()
+    if not bill:
+        return error_response("NOT_FOUND", "Bill not found", 404)
+
+    bill.guest_pay_unlocked = False  # type: ignore[assignment]
+    db.commit()
+    db.refresh(bill)
+
+    real_members = [m for m in (bill.members or []) if m.status != "invite_link"]
+    bill.member_count = len(real_members)
+    return success_response(
+        data=BillOut.model_validate(bill).model_dump(),
+        message="Guest payments paused",
+    )
 
 
 @router.get("/{bill_id}/summary")

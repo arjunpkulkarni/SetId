@@ -111,6 +111,7 @@ class TestPayEndpointTTL:
 
         bill = MagicMock()
         bill.title = "Dinner"
+        bill.guest_pay_unlocked = True
         payment.bill = bill
 
         with patch("app.api.routes.pay_public.PaymentService") as MockSvc, \

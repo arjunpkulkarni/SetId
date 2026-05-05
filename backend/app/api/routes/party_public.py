@@ -19,6 +19,7 @@ from app.models.bill_member import BillMember
 from app.models.item_assignment import ItemAssignment
 from app.models.receipt_item import ReceiptItem
 from app.services.calculation_service import CalculationService
+from app.services.guest_pay_gate import assert_guest_payment_allowed
 from app.services.payment_service import PaymentService
 from app.services.ws_manager import bill_ws_manager, schedule_broadcast
 
@@ -105,6 +106,7 @@ def _build_receipt_response(db: Session, bill: Bill, members: list[BillMember]) 
             "tip": str(bill.tip or 0),
             "tip_split_mode": bill.tip_split_mode or "proportional",
             "total": str(bill.total or 0),
+            "guest_pay_unlocked": bool(getattr(bill, "guest_pay_unlocked", True)),
         },
         "members": [
             {"id": str(m.id), "nickname": m.nickname, "status": m.status}
@@ -545,6 +547,15 @@ def confirm_and_pay(token: str, db: Session = Depends(get_db)):
     bill = member.bill
     if not bill:
         return error_response("NOT_FOUND", "Bill not found.", 404)
+
+    try:
+        assert_guest_payment_allowed(bill)
+    except ValueError:
+        return error_response(
+            "PAYMENTS_LOCKED",
+            "The host has not opened payments yet. Check back when they finish splitting the bill.",
+            403,
+        )
 
     calc_svc = CalculationService(db)
     breakdown = calc_svc.get_balance_breakdown(str(bill.id))

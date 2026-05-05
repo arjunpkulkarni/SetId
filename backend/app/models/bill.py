@@ -48,6 +48,10 @@ class Bill(Base):
     )
     ready_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
+    # When False, guests cannot confirm Stripe checkout or use SMS pay links
+    # until the host unlocks (after items are assigned, etc.).
+    guest_pay_unlocked: Mapped[bool] = mapped_column(Boolean, default=False)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

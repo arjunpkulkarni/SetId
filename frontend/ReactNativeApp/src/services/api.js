@@ -222,6 +222,12 @@ export const bills = {
 
   getMemberBalances: (billId) =>
     client.get(`/bills/${billId}/member-balances`),
+
+  /** Owner: guests may use /party/.../confirm and SMS pay links after this. */
+  unlockGuestPayments: (billId, { force = false } = {}) =>
+    client.post(`/bills/${billId}/guest-payments/unlock`, { force }),
+
+  lockGuestPayments: (billId) => client.post(`/bills/${billId}/guest-payments/lock`),
 };
 
 // ─── Members ─────────────────────────────────────────────────────────────────

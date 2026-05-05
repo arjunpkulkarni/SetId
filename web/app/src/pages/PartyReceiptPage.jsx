@@ -351,6 +351,7 @@ export default function PartyReceiptPage() {
 
   const items = receipt?.items || [];
   const title = billTitle || receipt?.bill_title || receipt?.bill_name || receipt?.title || receipt?.name || 'Your Bill';
+  const guestPaymentsOpen = receipt?.bill?.guest_pay_unlocked !== false;
   const myClaimedItems = items.filter(item =>
     item.claimed_by?.some(c => c.name === memberName || c.nickname === memberName)
   );
@@ -371,6 +372,12 @@ export default function PartyReceiptPage() {
 
         {error && (
           <div className="receipt-inline-error" role="alert">{error}</div>
+        )}
+
+        {!guestPaymentsOpen && (
+          <div className="receipt-inline-error" role="status" style={{ marginBottom: 12 }}>
+            The host has not opened payments yet. You can keep picking items; the Pay button will unlock when they are ready.
+          </div>
         )}
 
         {items.length > 0 && (
@@ -441,9 +448,13 @@ export default function PartyReceiptPage() {
           <button
             className="action-btn continue-btn"
             onClick={handleContinue}
-            disabled={!hasAnyClaims}
+            disabled={!hasAnyClaims || !guestPaymentsOpen}
           >
-            {hasAnyClaims ? 'Continue to Payment' : 'Select at least one item'}
+            {!guestPaymentsOpen
+              ? 'Waiting for host to allow payments'
+              : hasAnyClaims
+                ? 'Continue to Payment'
+                : 'Select at least one item'}
           </button>
         </div>
       </div>

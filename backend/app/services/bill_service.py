@@ -34,6 +34,7 @@ class BillService:
             currency=currency,
             notes=notes,
             owner_id=owner_id,
+            guest_pay_unlocked=False,
         )
         self.db.add(bill)
         self.db.flush()

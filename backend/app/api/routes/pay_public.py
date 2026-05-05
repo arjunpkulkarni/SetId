@@ -77,6 +77,15 @@ def get_public_payment(token: str, db: Session = Depends(get_db)):
             }
         )
 
+    from app.services.guest_pay_gate import bill_allows_guest_payment
+
+    if not bill_allows_guest_payment(bill):
+        return error_response(
+            "PAYMENTS_LOCKED",
+            "The host has not opened payments yet. Ask them to allow payments when everyone has picked their items.",
+            403,
+        )
+
     try:
         svc.ensure_stripe_client_for_payment(str(payment.id))
     except ValueError as e:

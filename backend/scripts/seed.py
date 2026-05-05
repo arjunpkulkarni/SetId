@@ -64,6 +64,7 @@ def seed() -> None:
             currency="USD",
             owner_id=demo_user.id,
             status="active",
+            guest_pay_unlocked=True,
         )
         db.add(bill)
         db.flush()

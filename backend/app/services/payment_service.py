@@ -176,7 +176,13 @@ class PaymentService:
             raise ValueError(
                 f"Payment amount must be at least {min_amounts[currency_upper]} {currency_upper}"
             )
-        
+
+        from app.models.bill import Bill
+        from app.services.guest_pay_gate import assert_guest_payment_allowed
+
+        bill_row = self.db.query(Bill).filter(Bill.id == bill_id).first()
+        assert_guest_payment_allowed(bill_row)
+
         existing = (
             self.db.query(Payment)
             .filter(

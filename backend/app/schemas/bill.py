@@ -58,12 +58,19 @@ class BillOut(BaseModel):
     notes: str | None = None
     member_count: int = 0
     ready_to_pay: bool = False
+    guest_pay_unlocked: bool = False
     ready_reason: str | None = None
     ready_marked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class GuestPayUnlockRequest(BaseModel):
+    """Skip assignment completeness checks (owner responsibility)."""
+
+    force: bool = False
 
 
 class MarkReadyRequest(BaseModel):
