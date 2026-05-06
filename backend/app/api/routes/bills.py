@@ -24,6 +24,7 @@ from app.services.calculation_service import CalculationService
 from app.services.payment_service import PaymentService
 from app.services.payment_notification_service import PaymentNotificationService
 from app.services.guest_pay_gate import validate_unlock_assignments
+from app.services.ws_manager import bill_ws_manager, schedule_broadcast
 
 router = APIRouter(prefix="/bills", tags=["Bills"])
 
@@ -284,6 +285,21 @@ def unlock_guest_payments(
 
     real_members = [m for m in (bill.members or []) if m.status != "invite_link"]
     bill.member_count = len(real_members)
+
+    # Broadcast so any guest sitting on the party / receipt page gets the
+    # locked banner removed and the Pay button enabled instantly, without
+    # having to pull-to-refresh. Fire-and-forget — `schedule_broadcast`
+    # routes onto the main loop and (when WS_REDIS_URL is set) fans out
+    # across workers.
+    if bill_ws_manager.client_count(str(bill_id)) > 0:
+        schedule_broadcast(
+            bill_ws_manager.broadcast(
+                str(bill_id),
+                "bill_status_update",
+                {"guest_pay_unlocked": True},
+            )
+        )
+
     return success_response(
         data=BillOut.model_validate(bill).model_dump(),
         message="Guests can now pay their shares",
@@ -317,6 +333,18 @@ def lock_guest_payments(
 
     real_members = [m for m in (bill.members or []) if m.status != "invite_link"]
     bill.member_count = len(real_members)
+
+    # Mirror the unlock broadcast — guests sitting on the receipt page see
+    # the locked banner appear and the Pay button disable immediately.
+    if bill_ws_manager.client_count(str(bill_id)) > 0:
+        schedule_broadcast(
+            bill_ws_manager.broadcast(
+                str(bill_id),
+                "bill_status_update",
+                {"guest_pay_unlocked": False},
+            )
+        )
+
     return success_response(
         data=BillOut.model_validate(bill).model_dump(),
         message="Guest payments paused",

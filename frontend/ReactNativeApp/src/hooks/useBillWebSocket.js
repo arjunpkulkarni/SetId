@@ -106,6 +106,13 @@ export default function useBillWebSocket(billId, handlers = {}) {
             case 'payment_complete':
               handlersRef.current.onPaymentComplete?.(data);
               break;
+            case 'bill_status_update':
+              // Host opened/closed guest payments from another device.
+              // Lets a second host session (or any subscriber) refresh
+              // its locked banner / Pause card without the user having
+              // to pull-to-refresh.
+              handlersRef.current.onBillStatusUpdate?.(data);
+              break;
             case 'pong':
               break;
             case 'ping':

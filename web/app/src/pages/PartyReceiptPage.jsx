@@ -192,6 +192,14 @@ export default function PartyReceiptPage() {
             fetchReceipt();
             return;
           }
+          if (type === 'bill_status_update') {
+            // Host flipped guest payments open/closed from the mobile app.
+            // The receipt payload's `bill.guest_pay_unlocked` flag drives
+            // the locked banner, the Continue-to-Payment button label, and
+            // its disabled state — refetch and let React re-render the lot.
+            fetchReceipt();
+            return;
+          }
         } catch (err) {
           console.error('[WS] ❌ Failed to parse message:', err, event.data);
         }

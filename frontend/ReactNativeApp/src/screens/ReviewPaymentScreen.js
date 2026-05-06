@@ -302,6 +302,12 @@ export default function ReviewPaymentScreen({ navigation, route }) {
     onAssignmentUpdate: () => {
       load(true);
     },
+    onBillStatusUpdate: () => {
+      // Another host session (or this one, on a second device) flipped
+      // guest payments open/closed. Reload so the locked banner and the
+      // "Guest payments open / Pause" card flip in lockstep.
+      load(true);
+    },
   }), [load]);
 
   const { connected: wsConnected } = useBillWebSocket(billId, wsHandlers);
