@@ -18,6 +18,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.payout import (
     BalanceOut,
+    BalanceTxnOut,
     ConnectStatusOut,
     ExternalAccountUpdateRequest,
     PayoutOut,
@@ -184,6 +185,32 @@ def list_payouts(
     payouts = svc.list_payouts(current_user)
     return success_response(
         data=[PayoutOut.model_validate(p).model_dump() for p in payouts]
+    )
+
+
+@router.get("/balance-transactions")
+def list_balance_transactions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Recent incoming transactions making up the host's pending balance.
+
+    Drives the "Recent transactions" list on the mobile Payouts screen so
+    a host can see *which* guest payments their headline figure is
+    composed of. Each row is enriched with the bill title and payer name
+    from our local DB when we can match the Stripe charge back to a
+    ``Payment`` row.
+    """
+    try:
+        svc = StripeConnectService(db)
+        items = svc.list_recent_balance_transactions(current_user)
+    except StripeConnectError as e:
+        return _to_error(e)
+    return success_response(
+        data=[
+            BalanceTxnOut.model_validate(item).model_dump(mode="json")
+            for item in items
+        ]
     )
 
 

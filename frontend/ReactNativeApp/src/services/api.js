@@ -432,6 +432,17 @@ export const stripeConnect = {
 
   /** Last 20 payouts for the current user (history / next-arrival). */
   listPayouts: () => client.get('/stripe/connect/payouts'),
+
+  /** Recent incoming transactions making up the host's "Pending balance".
+   *  Each entry: `{ id, amount_cents, gross_cents, fee_cents, status,
+   *  created_at, bill_id, bill_title, payer_name }`. `amount_cents` is the
+   *  net-to-host figure that actually credits the connected account
+   *  (Stripe per-charge fee + our application fee already deducted), so
+   *  these sum to the headline balance. `bill_title` and `payer_name` are
+   *  best-effort enrichments — older or out-of-band charges may come back
+   *  with both as `null`. */
+  listBalanceTransactions: () =>
+    client.get('/stripe/connect/balance-transactions'),
 };
 
 // ─── Health ──────────────────────────────────────────────────────────────────

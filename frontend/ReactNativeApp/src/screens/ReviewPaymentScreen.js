@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CommonActions } from '@react-navigation/native';
 import { colors, radii, shadows } from '../theme';
 import { useAuth } from '../contexts/AuthContext';
 import useBillWebSocket from '../hooks/useBillWebSocket';
@@ -443,7 +444,26 @@ export default function ReviewPaymentScreen({ navigation, route }) {
             setCompleting(true);
             try {
               await billsApi.update(billId, { status: 'settled' });
-              navigation.goBack();
+              // Reset the nav stack back to the Dashboard tab. A plain
+              // `goBack()` would land the user on the BillSplit screen
+              // (the screen they came from), which is jarring after
+              // finalizing — they expect to land on home so the bill
+              // shows up under "Recent activity". Mirrors how
+              // FundsCollectedScreen returns to the dashboard.
+              navigation.dispatch(
+                CommonActions.reset({
+                  index: 0,
+                  routes: [
+                    {
+                      name: 'MainTabs',
+                      state: {
+                        routes: [{ name: 'DashboardTab' }],
+                        index: 0,
+                      },
+                    },
+                  ],
+                }),
+              );
             } catch (err) {
               setCompleting(false);
               Alert.alert(

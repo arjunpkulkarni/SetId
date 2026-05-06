@@ -34,6 +34,31 @@ function formatDate(iso) {
   }
 }
 
+// Compact "5m ago" / "2h ago" / "3d ago" stamps for the breakdown rows.
+// Falls back to a Mon DD date once a transaction is older than ~6 days
+// so the column doesn't read as "8d ago" / "31d ago".
+function formatRelativeTime(iso) {
+  if (!iso) return '';
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return '';
+  const diffMs = Date.now() - ts;
+  if (diffMs < 60_000) return 'Just now';
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  try {
+    return new Date(iso).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    });
+  } catch {
+    return '';
+  }
+}
+
 // `arrival_date` from Stripe is a Unix timestamp (seconds). Format it as
 // a human-friendly date so the "Next payout" line reads like "Apr 25".
 function formatArrivalDate(unixSeconds) {
@@ -105,6 +130,10 @@ export default function PayoutsScreen({ navigation }) {
   const [availableCents, setAvailableCents] = useState(0);
   const [pendingCents, setPendingCents] = useState(0);
   const [payouts, setPayouts] = useState([]);
+  // Breakdown of the "Pending balance" headline — each entry is an incoming
+  // guest payment (net-to-host cents) that hasn't been paid out yet. Lets
+  // the host see "your $12.40 pending is Cian $1.04 + Jn $0.50 + …".
+  const [transactions, setTransactions] = useState([]);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -124,9 +153,10 @@ export default function PayoutsScreen({ navigation }) {
       setStatus(s);
 
       if (s?.connected && s?.payouts_enabled) {
-        const [balanceRes, payoutsRes] = await Promise.all([
+        const [balanceRes, payoutsRes, txnsRes] = await Promise.all([
           stripeConnect.getBalance().catch(() => null),
           stripeConnect.listPayouts().catch(() => null),
+          stripeConnect.listBalanceTransactions().catch(() => null),
         ]);
         if (!mountedRef.current) return;
         // Backend returns both `available_cents` (cleared, queued for the
@@ -139,9 +169,13 @@ export default function PayoutsScreen({ navigation }) {
         );
         setPendingCents(b.pending_cents ?? 0);
         setPayouts(Array.isArray(payoutsRes?.data) ? payoutsRes.data : []);
+        setTransactions(
+          Array.isArray(txnsRes?.data) ? txnsRes.data : [],
+        );
       } else {
         setAvailableCents(0);
         setPendingCents(0);
+        setTransactions([]);
         // Still load history even if payouts are currently disabled —
         // user may want to see past successful payouts.
         const payoutsRes = await stripeConnect.listPayouts().catch(() => null);
@@ -369,6 +403,78 @@ export default function PayoutsScreen({ navigation }) {
     );
   };
 
+  // "Recent transactions" — the breakdown of the headline pending balance.
+  // Each row is one incoming guest payment; the amount shown is the
+  // net-to-host figure (Stripe per-charge fee + our application fee already
+  // deducted), so summing the rows reconciles with the headline number above.
+  const renderTransactions = () => {
+    if (!status?.connected || !status?.payouts_enabled) return null;
+    if (!transactions.length) return null;
+
+    return (
+      <View style={styles.historySection}>
+        <Text style={styles.sectionLabel}>Recent transactions</Text>
+        <Text style={styles.sectionHelper}>
+          Each guest payment that makes up your pending balance.
+        </Text>
+        <View style={[styles.historyCard, shadows.card]}>
+          {transactions.map((t, i) => {
+            const isPending = t.status === 'pending';
+            const subtitleParts = [];
+            if (t.bill_title) subtitleParts.push(t.bill_title);
+            const stamp = formatRelativeTime(t.created_at);
+            if (stamp) subtitleParts.push(stamp);
+
+            const primaryLine = t.payer_name
+              ? `${t.payer_name} paid`
+              : 'Guest payment';
+
+            return (
+              <View
+                key={t.id}
+                style={[
+                  styles.historyRow,
+                  i !== transactions.length - 1 && styles.historyRowBorder,
+                ]}
+              >
+                <View style={styles.historyIconWrap}>
+                  <MaterialIcons
+                    name={isPending ? 'schedule' : 'check-circle'}
+                    size={20}
+                    color={isPending ? colors.onSurfaceVariant : colors.secondary}
+                  />
+                </View>
+                <View style={styles.historyInfo}>
+                  <Text style={styles.historyAmount} numberOfLines={1}>
+                    {primaryLine}
+                  </Text>
+                  {subtitleParts.length > 0 && (
+                    <Text style={styles.historyMeta} numberOfLines={1}>
+                      {subtitleParts.join(' · ')}
+                    </Text>
+                  )}
+                </View>
+                <View style={styles.txnAmountCol}>
+                  <Text style={styles.txnAmount}>
+                    +{formatUsd(t.amount_cents)}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.txnStatusPill,
+                      isPending ? styles.txnStatusPending : styles.txnStatusReady,
+                    ]}
+                  >
+                    {isPending ? 'On hold' : 'Ready'}
+                  </Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      </View>
+    );
+  };
+
   const renderHistory = () => {
     if (!payouts.length) return null;
     return (
@@ -441,6 +547,7 @@ export default function PayoutsScreen({ navigation }) {
           <>
             {renderStatusCard()}
             {renderBalanceCard()}
+            {renderTransactions()}
             {renderHistory()}
           </>
         )}
@@ -611,6 +718,16 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     textTransform: 'uppercase',
   },
+  // Plain-English helper sitting just under the SECTION LABEL so a host
+  // who hasn't seen the screen before knows what they're looking at.
+  sectionHelper: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: colors.onSurfaceVariant,
+    marginTop: -6,
+    marginBottom: 12,
+    lineHeight: 18,
+  },
   historyCard: {
     backgroundColor: colors.surfaceContainerLowest,
     borderRadius: radii.xl,
@@ -655,5 +772,38 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.8,
+  },
+
+  // Recent transactions — right column with the credit amount and a
+  // status pill ("On hold" while inside the Stripe hold, "Ready" once
+  // the funds have moved into the available bucket).
+  txnAmountCol: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  txnAmount: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  txnStatusPill: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.full,
+    overflow: 'hidden',
+  },
+  txnStatusPending: {
+    backgroundColor: colors.surfaceContainer,
+    color: colors.onSurfaceVariant,
+  },
+  txnStatusReady: {
+    backgroundColor: colors.secondaryContainer,
+    color: colors.secondary,
   },
 });

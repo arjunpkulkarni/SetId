@@ -64,6 +64,41 @@ class BalanceOut(BaseModel):
     currency: str = "usd"
 
 
+class BalanceTxnOut(BaseModel):
+    """A single incoming transaction that contributes to the host's pending
+    balance — i.e. the breakdown the mobile "Pending balance" headline is
+    summed from.
+
+    All amounts are net of fees from the host's perspective:
+
+    * ``amount_cents`` = what actually credited the connected account
+      (Stripe per-charge fee + our application fee already deducted).
+    * ``gross_cents``  = what the guest paid before any fees.
+    * ``fee_cents``    = ``gross_cents`` - ``amount_cents`` (Stripe + app fees).
+
+    ``status`` mirrors Stripe's balance-transaction lifecycle:
+
+    * ``pending``   — funds inside Stripe's hold period, will roll into
+      ``available`` automatically (typically ~2 business days).
+    * ``available`` — cleared, queued for the next scheduled daily payout.
+
+    ``bill_title`` / ``payer_name`` are best-effort enrichments from our local
+    DB (matched via the charge's PaymentIntent → ``Payment`` row). They're
+    optional because old charges, refunds, or out-of-band transactions may
+    not have a corresponding local row.
+    """
+
+    id: str
+    amount_cents: int
+    gross_cents: int
+    fee_cents: int
+    status: str
+    created_at: datetime
+    bill_id: uuid.UUID | None = None
+    bill_title: str | None = None
+    payer_name: str | None = None
+
+
 class PayoutsSetupIndividual(BaseModel):
     """Identity fields the mobile app collects in-app for Custom Connect
     onboarding. All required per Stripe's US KYC minimum.

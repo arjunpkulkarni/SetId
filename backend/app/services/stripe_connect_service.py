@@ -32,12 +32,16 @@ Fees (out of our control):
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import stripe
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.bill import Bill
+from app.models.bill_member import BillMember
+from app.models.payment import Payment
 from app.models.payout import Payout
 from app.models.user import User
 
@@ -668,6 +672,148 @@ class StripeConnectService:
             .limit(limit)
             .all()
         )
+
+    def list_recent_balance_transactions(
+        self, user: User, limit: int = 20
+    ) -> list[dict]:
+        """Return the recent incoming transactions making up the host's
+        pending balance — used by the "Recent transactions" list on the
+        Payouts screen so a host can see *which* guest payments their
+        headline is composed of.
+
+        We pull straight from ``stripe.BalanceTransaction.list`` (scoped to
+        the connected account) because that's the only source that matches
+        the headline 1:1 — it returns the **net-to-host** amount per entry
+        and the same ``status`` (``available`` / ``pending``) Stripe uses
+        in :meth:`get_balance_breakdown`.
+
+        We then enrich each entry with the bill title + payer name from our
+        local DB by:
+          1. ``expand=['data.source']`` so each balance txn carries its
+             charge inline.
+          2. Reading ``charge.payment_intent`` and looking up the matching
+             ``Payment`` row — this is the same id we wrote when the guest
+             paid (see ``payment_service.py``).
+          3. Joining ``Bill`` + ``BillMember`` for ``title`` and
+             ``nickname``.
+        Refunds, payouts, transfers, and stripe_fee entries are filtered
+        out — the host doesn't think of those as "transactions making up
+        my balance".
+        """
+        if not user.stripe_account_id:
+            raise StripeConnectError(
+                "NOT_CONNECTED",
+                "Add a payout method before checking your balance.",
+            )
+        try:
+            txns = stripe.BalanceTransaction.list(
+                limit=max(1, min(limit, 100)),
+                expand=["data.source"],
+                stripe_account=user.stripe_account_id,
+            )
+        except stripe.error.StripeError as e:
+            raise StripeConnectError(
+                "STRIPE_ERROR", self._safe_stripe_message(e)
+            )
+
+        # `type` we keep: incoming-money entries that haven't been paid out
+        # yet. `payment` is what destination charges show up as on the
+        # connected account; `charge` is the direct-charge variant. Anything
+        # else (payouts, fees, refunds) is intentionally hidden — they
+        # don't belong in a "what's making up my pending balance" list.
+        _KEEP_TYPES = {"payment", "charge"}
+
+        # Pre-collect the PaymentIntent ids so we can resolve all bills/
+        # members in a single pair of queries instead of one-per-row. We
+        # deliberately only look at the first page (`txns.data`); a
+        # `limit=20` slice is plenty for the UI list and avoids accidental
+        # auto-paging through the host's whole Stripe history.
+        pending_entries: list[tuple[stripe.BalanceTransaction, Optional[str]]] = []
+        for entry in txns.data:
+            etype = getattr(entry, "type", None)
+            if etype not in _KEEP_TYPES:
+                continue
+            source = getattr(entry, "source", None)
+            # `source` is the charge object (expanded). `payment_intent`
+            # is a string id like `pi_...`. Older / out-of-band charges
+            # may not carry one — we fall through to None and skip the
+            # local enrichment in that case.
+            pi_id = (
+                getattr(source, "payment_intent", None) if source else None
+            )
+            pending_entries.append((entry, pi_id))
+
+        pi_ids = [pi for (_, pi) in pending_entries if pi]
+        payment_rows: list[Payment] = (
+            self.db.query(Payment)
+            .filter(Payment.stripe_payment_intent_id.in_(pi_ids))
+            .all()
+            if pi_ids
+            else []
+        )
+        payments_by_pi = {p.stripe_payment_intent_id: p for p in payment_rows}
+
+        bill_ids = {p.bill_id for p in payment_rows}
+        member_ids = {p.bill_member_id for p in payment_rows}
+        bills_by_id = (
+            {
+                b.id: b
+                for b in self.db.query(Bill)
+                .filter(Bill.id.in_(bill_ids))
+                .all()
+            }
+            if bill_ids
+            else {}
+        )
+        members_by_id = (
+            {
+                m.id: m
+                for m in self.db.query(BillMember)
+                .filter(BillMember.id.in_(member_ids))
+                .all()
+            }
+            if member_ids
+            else {}
+        )
+
+        out: list[dict] = []
+        for entry, pi_id in pending_entries:
+            amount = int(getattr(entry, "amount", 0) or 0)
+            fee = int(getattr(entry, "fee", 0) or 0)
+            # Gross = what the guest paid. ``net`` (amount on the
+            # connected account) excludes the Stripe fee + our application
+            # fee; gross = amount + fee.
+            gross = amount + fee
+
+            payment = payments_by_pi.get(pi_id) if pi_id else None
+            bill = bills_by_id.get(payment.bill_id) if payment else None
+            member = (
+                members_by_id.get(payment.bill_member_id) if payment else None
+            )
+
+            # `created` is a unix timestamp — convert to a tz-aware
+            # datetime so the Pydantic schema serializes a normal ISO
+            # string for the client.
+            created_unix = int(getattr(entry, "created", 0) or 0)
+            created_at = datetime.fromtimestamp(created_unix, tz=timezone.utc)
+
+            out.append(
+                {
+                    "id": getattr(entry, "id", "") or "",
+                    "amount_cents": amount,
+                    "gross_cents": gross,
+                    "fee_cents": fee,
+                    "status": getattr(entry, "status", "pending") or "pending",
+                    "created_at": created_at,
+                    "bill_id": bill.id if bill else None,
+                    "bill_title": bill.title if bill else None,
+                    "payer_name": (
+                        member.nickname if member is not None else None
+                    ),
+                }
+            )
+
+        return out
 
     # ─── Webhook ─────────────────────────────────────────────────────────
 
