@@ -17,8 +17,6 @@ import { useAuth } from '../contexts/AuthContext';
 import useBillWebSocket from '../hooks/useBillWebSocket';
 import {
   bills as billsApi,
-  assignments as assignmentsApi,
-  payments as paymentsApi,
   members as membersApi,
   ApiError,
 } from '../services/api';
@@ -160,62 +158,43 @@ export default function ReviewPaymentScreen({ navigation, route }) {
       setLoading(true);
     }
     try {
-      const [sumRes, payRes] = await Promise.all([
+      // Pull totals from `/balance-breakdown` rather than recomputing
+      // them client-side. The backend's CalculationService is the canonical
+      // source: it includes service_fee + receipt_extra_fees and honors
+      // `expected_party_size`-based equal tax. Recomputing here drifted
+      // away from the party (web) view — the host saw a smaller "owed"
+      // amount because client math forgot the service fee, so guests
+      // would owe (e.g.) $68.74 on the web but show as $61.22 on the
+      // host's tracker.
+      const [sumRes, breakdownRes] = await Promise.all([
         billsApi.getSummary(billId),
-        paymentsApi.listForBill(billId),
+        billsApi.getBalanceBreakdown(billId),
       ]);
 
       const data = sumRes.data;
       const b = data.bill;
       const mems = data.members ?? [];
-      const allPayments = payRes.data ?? [];
       setBill(b);
 
-      let assignRes;
-      try {
-        assignRes = await assignmentsApi.list(billId);
-      } catch {
-        assignRes = { data: [] };
-      }
-      const allAssignments = assignRes.data ?? [];
+      const breakdown = breakdownRes?.data ?? {};
+      const breakdownMembers = Array.isArray(breakdown.members) ? breakdown.members : [];
+      const breakdownByMemberId = new Map(
+        breakdownMembers.map((bm) => [String(bm.member_id), bm]),
+      );
 
       const uid = String(user?.id ?? '');
       const totalBill = parseFloat(b?.total ?? 0);
-      const allItemsSubtotal = allAssignments.reduce(
-        (s, a) => s + parseFloat(a.amount_owed ?? 0), 0,
-      );
-      const billSubtotal = parseFloat(b?.subtotal ?? allItemsSubtotal);
-      const billTax = parseFloat(b?.tax ?? 0);
-      const billTip = b?.tip_split_mode === 'proportional'
-        ? parseFloat(b?.tip ?? 0)
-        : 0;
 
       const allMemberData = mems.map((m) => {
-        const mAssignments = allAssignments.filter(
-          (a) => String(a.bill_member_id) === String(m.id),
-        );
-        const itemSubtotal = mAssignments.reduce(
-          (s, a) => s + parseFloat(a.amount_owed ?? 0),
-          0,
-        );
-        const proportion = billSubtotal > 0 ? itemSubtotal / billSubtotal : 0;
-        const taxShare = billTax * proportion;
-        const tipShare = billTip * proportion;
-        const amountOwed = Math.round((itemSubtotal + taxShare + tipShare) * 100) / 100;
-
-        const mPayments = allPayments.filter(
-          (p) => String(p.bill_member_id) === String(m.id) && p.status === 'succeeded',
-        );
-        const amountPaid = mPayments.reduce(
-          (s, p) => s + parseFloat(p.amount ?? 0),
-          0,
-        );
-
         const isHost = m.user_id != null && String(m.user_id) === uid;
+        const bm = breakdownByMemberId.get(String(m.id)) ?? {};
+        const amountOwed = parseFloat(bm.total_owed ?? 0);
+        const amountPaid = parseFloat(bm.total_paid ?? 0);
+        const remaining = parseFloat(bm.remaining ?? Math.max(0, amountOwed - amountPaid));
 
         let status = 'pending';
         let subtitle = 'Pending request';
-        if (amountPaid >= amountOwed && amountOwed > 0) {
+        if (amountOwed > 0 && remaining <= 0) {
           status = 'paid';
           subtitle = 'Paid via Settld';
         } else if (m.marked_paid) {
@@ -234,7 +213,10 @@ export default function ReviewPaymentScreen({ navigation, route }) {
       });
 
       const nonHostMembers = allMemberData.filter((m) => !m.isHost);
-      const amountToCollect = nonHostMembers.reduce((sum, m) => sum + (m.amountOwed || 0), 0);
+      const amountToCollect = nonHostMembers.reduce(
+        (sum, m) => sum + (m.amountOwed || 0),
+        0,
+      );
       setHostShare(Math.max(0, totalBill - amountToCollect));
       setParticipants(nonHostMembers);
     } catch (err) {
@@ -439,6 +421,39 @@ export default function ReviewPaymentScreen({ navigation, route }) {
           />
         }
       >
+        {/* Locked-state banner: pinned above everything else so the host
+            can never miss the "guests are blocked, tap to allow" CTA. */}
+        {!guestPayUnlocked && (
+          <View style={styles.lockedBanner}>
+            <View style={styles.lockedBannerHeader}>
+              <View style={styles.lockedBannerIconWrap}>
+                <MaterialIcons name="lock" size={22} color={colors.onError} />
+              </View>
+              <View style={styles.lockedBannerCopy}>
+                <Text style={styles.lockedBannerTitle}>Guests can’t pay yet</Text>
+                <Text style={styles.lockedBannerSub}>
+                  You haven’t opened payments. Members see “waiting on host” and the Pay button is disabled until you allow it.
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={promptUnlockGuestPay}
+              disabled={unlockBusy}
+              activeOpacity={0.85}
+              style={[styles.lockedBannerCta, unlockBusy && styles.guestPayBtnDisabled]}
+            >
+              {unlockBusy ? (
+                <ActivityIndicator color={colors.onSecondary} size="small" />
+              ) : (
+                <>
+                  <MaterialIcons name="lock-open" size={18} color={colors.onSecondary} />
+                  <Text style={styles.lockedBannerCtaText}>Allow guests to pay</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Bill header */}
         <View style={styles.billHeader}>
           <View style={styles.billHeaderLeft}>
@@ -453,23 +468,15 @@ export default function ReviewPaymentScreen({ navigation, route }) {
           </View>
         </View>
 
-        <View style={[styles.guestPayCard, !guestPayUnlocked && styles.guestPayCardMuted]}>
-          <MaterialIcons
-            name={guestPayUnlocked ? 'lock-open' : 'lock'}
-            size={22}
-            color={colors.secondary}
-          />
-          <View style={styles.guestPayCopy}>
-            <Text style={styles.guestPayTitle}>
-              {guestPayUnlocked ? 'Guest payments open' : 'Guest payments locked'}
-            </Text>
-            <Text style={styles.guestPaySub}>
-              {guestPayUnlocked
-                ? 'Guests can pay their share. Pause if you need to fix items first.'
-                : 'When everyone has joined and picked items, allow payments so they can check out.'}
-            </Text>
-          </View>
-          {guestPayUnlocked ? (
+        {guestPayUnlocked && (
+          <View style={styles.guestPayCard}>
+            <MaterialIcons name="lock-open" size={22} color={colors.secondary} />
+            <View style={styles.guestPayCopy}>
+              <Text style={styles.guestPayTitle}>Guest payments open</Text>
+              <Text style={styles.guestPaySub}>
+                Guests can pay their share. Pause if you need to fix items first.
+              </Text>
+            </View>
             <TouchableOpacity
               onPress={promptLockGuestPay}
               style={styles.guestPayBtnSecondary}
@@ -477,20 +484,8 @@ export default function ReviewPaymentScreen({ navigation, route }) {
             >
               <Text style={styles.guestPayBtnSecondaryText}>Pause</Text>
             </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              onPress={promptUnlockGuestPay}
-              disabled={unlockBusy}
-              style={[styles.guestPayBtn, unlockBusy && styles.guestPayBtnDisabled]}
-            >
-              {unlockBusy ? (
-                <ActivityIndicator color={colors.onSecondary} size="small" />
-              ) : (
-                <Text style={styles.guestPayBtnText}>Allow</Text>
-              )}
-            </TouchableOpacity>
-          )}
-        </View>
+          </View>
+        )}
 
         {/* Host's share callout */}
         {hostShare > 0 && (
@@ -652,6 +647,74 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.onSurfaceVariant,
     marginTop: 2,
+  },
+
+  // Big "guests can't pay yet" warning banner shown at the very top of
+  // the screen until the host explicitly opens payments. Intentionally
+  // visually loud — this is the *only* gate keeping guests from paying,
+  // so the host should never wonder where the unlock is.
+  lockedBanner: {
+    backgroundColor: colors.errorContainer ?? '#FFE4E1',
+    borderRadius: radii.xl,
+    padding: 18,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: colors.error ?? '#B3261E',
+    ...Platform.select({
+      ios: {
+        shadowColor: colors.error ?? '#B3261E',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.18,
+        shadowRadius: 14,
+      },
+      android: { elevation: 4 },
+    }),
+  },
+  lockedBannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 14,
+  },
+  lockedBannerIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.error ?? '#B3261E',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockedBannerCopy: {
+    flex: 1,
+  },
+  lockedBannerTitle: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    color: colors.onErrorContainer ?? '#410E0B',
+  },
+  lockedBannerSub: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: colors.onErrorContainer ?? '#410E0B',
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  lockedBannerCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: colors.secondary,
+    paddingVertical: 14,
+    borderRadius: radii.full,
+  },
+  lockedBannerCtaText: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.onSecondary,
   },
 
   guestPayCard: {

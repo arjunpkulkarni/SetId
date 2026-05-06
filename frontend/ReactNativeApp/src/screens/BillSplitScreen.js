@@ -26,6 +26,7 @@ import {
   receipts as receiptsApi,
   members as membersApi,
   stripeConnect,
+  ApiError,
 } from '../services/api';
 import useBillWebSocket from '../hooks/useBillWebSocket';
 import { newClientMutationId, useBillData } from '../hooks/useBillData';
@@ -571,9 +572,53 @@ export default function BillSplitScreen({ navigation, route }) {
         return;
       }
 
-      navigation.navigate('ReviewPayment', { billId });
+      // Tapping "Next" is the host's signal that the bill is ready to
+      // collect — open guest payments so the moment they hit Review they
+      // (and any SMS pay-link recipients) can actually check out. The
+      // backend enforces "all items assigned" unless we pass `force`,
+      // which mirrors what the lock card on Review Payment offers.
+      try {
+        await billsApi.unlockGuestPayments(billId, { force: false });
+        navigation.navigate('ReviewPayment', { billId });
+      } catch (unlockErr) {
+        const code = unlockErr instanceof ApiError ? unlockErr.code : null;
+        if (code === 'ASSIGNMENTS_INCOMPLETE') {
+          setSaving(false);
+          Alert.alert(
+            'Some items aren’t assigned',
+            "Every receipt line should be assigned to a member before guests can pay. You can still open payments now if you want — unassigned items just won’t be billed to anyone.",
+            [
+              { text: 'Keep editing', style: 'cancel' },
+              {
+                text: 'Open payments anyway',
+                style: 'destructive',
+                onPress: async () => {
+                  setSaving(true);
+                  try {
+                    await billsApi.unlockGuestPayments(billId, { force: true });
+                    navigation.navigate('ReviewPayment', { billId });
+                  } catch (forceErr) {
+                    Alert.alert(
+                      'Could not open payments',
+                      forceErr?.message ?? 'Try again from the Payment Tracking screen.',
+                    );
+                  } finally {
+                    setSaving(false);
+                  }
+                },
+              },
+            ],
+          );
+          return;
+        }
+        // Already unlocked, or any other recoverable error — log and
+        // continue to Review Payment so the host can finish the unlock
+        // there if needed.
+        if (__DEV__) console.warn('[BillSplit] auto-unlock failed:', unlockErr);
+        navigation.navigate('ReviewPayment', { billId });
+      }
     } catch (err) {
-      Alert.alert('Error', err?.error?.message ?? 'Failed to proceed');
+      Alert.alert('Error', err?.error?.message ?? err?.message ?? 'Failed to proceed');
     } finally {
       setSaving(false);
     }
