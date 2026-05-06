@@ -3,7 +3,6 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   getReceipt,
   claimItems,
-  evenSplitReceipt,
   buildPartyWsUrl,
   newClientMutationId,
 } from '../services/api';
@@ -22,7 +21,6 @@ export default function PartyReceiptPage() {
   const [receipt, setReceipt] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [splittingEvenly, setSplittingEvenly] = useState(false);
   const wsRef = useRef(null);
   const pollRef = useRef(null);
   // Set of client_mutation_ids this tab initiated. Echoed broadcasts that
@@ -306,25 +304,6 @@ export default function PartyReceiptPage() {
     mutationQueueRef.current[itemId] = next.catch(() => {});
   }, [token, optimisticallyToggleClaim, fetchReceipt]);
 
-  const handleEvenSplit = useCallback(async () => {
-    const mutationId = newClientMutationId();
-    ownMutationIdsRef.current.add(mutationId);
-    setSplittingEvenly(true);
-
-    try {
-      const data = await evenSplitReceipt(token, { clientMutationId: mutationId });
-      setReceipt(data);
-      setError(null);
-    } catch (err) {
-      ownMutationIdsRef.current.delete(mutationId);
-      console.error('[API] ❌ Even split error:', err);
-      setError(err.message);
-      fetchReceipt();
-    } finally {
-      setSplittingEvenly(false);
-    }
-  }, [token, fetchReceipt]);
-
   const handleContinue = () => {
     navigate(`${basePath}/${token}/pay`, {
       state: { memberName, billTitle: title },
@@ -378,16 +357,6 @@ export default function PartyReceiptPage() {
           <div className="receipt-inline-error" role="status" style={{ marginBottom: 12 }}>
             The host has not opened payments yet. You can keep picking items; the Pay button will unlock when they are ready.
           </div>
-        )}
-
-        {items.length > 0 && (
-          <button
-            className="even-split-btn"
-            onClick={handleEvenSplit}
-            disabled={splittingEvenly}
-          >
-            {splittingEvenly ? 'Splitting...' : 'Even split with everyone'}
-          </button>
         )}
 
         <div className="items-card">

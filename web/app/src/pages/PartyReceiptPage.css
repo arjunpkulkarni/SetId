@@ -58,31 +58,6 @@
 
 /* ── Item claim list ── */
 
-.even-split-btn {
-  width: 100%;
-  border: 1px solid var(--color-outline-variant);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-lowest);
-  color: var(--color-secondary);
-  font-family: var(--font-display);
-  font-size: 15px;
-  font-weight: 700;
-  padding: 14px var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-
-.even-split-btn:hover:not(:disabled) {
-  background: var(--color-surface-low);
-  border-color: var(--color-secondary);
-}
-
-.even-split-btn:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-
 .items-card {
   background: var(--color-surface-lowest);
   border-radius: var(--radius-xl);
