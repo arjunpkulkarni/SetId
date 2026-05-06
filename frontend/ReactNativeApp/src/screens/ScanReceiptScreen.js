@@ -333,10 +333,15 @@ export default function ScanReceiptScreen({ navigation, route }) {
 
   const pickFromGallery = async () => {
     try {
+      // `allowsEditing: true` forces the iOS picker into its built-in
+      // square-crop UI, which is what's been making receipts look "3x
+      // zoomed" after upload — the user picks a full receipt and the
+      // picker hands back a tightly cropped square. Pull the full asset
+      // and let the frozen-still view fit it (`resizeMode="contain"`)
+      // so the entire receipt is visible, no forced crop.
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         quality: 1.0,
-        allowsEditing: true,
       });
 
       if (result.canceled) return;
@@ -366,14 +371,21 @@ export default function ScanReceiptScreen({ navigation, route }) {
   return (
     <View style={styles.root}>
       {frozen ? (
-        // Render the captured image where the camera feed used to be. We
-        // dim it slightly with the same scrim the camera view has, so the
-        // bottom sheet + top bar readability is identical in both states.
+        // Render the captured / picked image where the camera feed used
+        // to be. `contain` (vs. the old `cover`) was the other half of the
+        // "3x zoom" report: a `cover` fill on a portrait phone screen
+        // was center-cropping any non-portrait receipt photo to fit,
+        // visually amputating the top and bottom of the receipt. With
+        // `contain` the whole receipt is always visible, with the dark
+        // root background (#111) acting as letterbox bars when the
+        // aspect ratio doesn't match the screen.
+        // The dim scrim still sits on top so the bottom sheet + top bar
+        // readability is identical in camera-feed and frozen states.
         <>
           <Image
             source={{ uri: lastCaptureUri }}
             style={StyleSheet.absoluteFillObject}
-            resizeMode="cover"
+            resizeMode="contain"
           />
           <View style={styles.frozenDim} pointerEvents="none" />
         </>
