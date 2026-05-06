@@ -44,11 +44,23 @@ class ConnectStatusOut(BaseModel):
 
 
 class BalanceOut(BaseModel):
-    """Pending balance — the amount that will go out in the next
-    automatic daily payout. Not instant-payable; we no longer run
-    instant payouts."""
+    """Pending balance — money the host has earned but hasn't been paid out
+    to their bank yet.
+
+    Two Stripe buckets contribute:
+
+    * ``available_cents``: cleared funds queued for the next scheduled
+      daily payout.
+    * ``pending_cents``: money received for this account that is still inside
+      Stripe's standard hold period (typically ~2 business days for US card
+      payments) and will roll into ``available`` automatically.
+
+    The mobile UI sums these into a single "Pending balance" headline so a
+    payment received today is visible immediately, instead of staying $0.00
+    until Stripe releases it."""
 
     available_cents: int
+    pending_cents: int = 0
     currency: str = "usd"
 
 
@@ -111,8 +123,8 @@ class PayoutsSetupRequest(BaseModel):
     """Body of `POST /stripe/connect/setup`. Combines the in-app KYC
     form with exactly one client token: debit card **or** US bank account.
 
-    `card_token` / `bank_token`: `tok_...` from the Stripe React Native SDK
-    (`createToken` with type Card or BankAccount).
+    `card_token` / `bank_token`: token id from the Stripe React Native SDK
+    (`createToken` with type Card → ``tok_…`` / type BankAccount → ``btok_…``).
 
     `payment_method_id` is an optional `pm_...` for the same **card** only;
     the server attaches it to the user's Customer for paying bills as a guest.

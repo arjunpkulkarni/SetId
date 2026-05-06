@@ -141,9 +141,22 @@ class StripeConnectService:
             )
 
     def _require_bank_payout_token(self, bank_token: str) -> None:
-        """Ensure `tok_...` is a US bank-account token from the client SDK."""
+        """Ensure the value is a US bank-account token from the client SDK.
+
+        Stripe's React Native ``createToken({ type: 'BankAccount', ... })`` call
+        returns IDs prefixed with ``btok_``, not ``tok_`` (which is what the
+        same call returns for cards). We previously rejected anything that
+        didn't start with ``tok_`` here, which made every bank-onboarding and
+        Change-payout-method attempt fail with "Invalid bank token. Please try
+        again." even though the Stripe SDK had successfully tokenized the
+        account.
+
+        We accept both prefixes and let ``stripe.Token.retrieve`` plus the
+        ``type == "bank_account"`` check below do the real validation —
+        attaching a card token here would still be caught and rejected.
+        """
         token_id = (bank_token or "").strip()
-        if not token_id.startswith("tok_"):
+        if not (token_id.startswith("btok_") or token_id.startswith("tok_")):
             raise StripeConnectError(
                 "INVALID_BANK_ACCOUNT",
                 "Invalid bank token. Please try again.",
@@ -312,10 +325,10 @@ class StripeConnectService:
               address_line1, address_city, address_state, address_postal_code,
               ssn_last_4, phone,
             }
-        Exactly one of `card_token` or `bank_token` must be set — each a
-        `tok_...` from the Stripe client SDK (`Card` or `BankAccount`).
-        `client_ip` is required by Stripe for Custom-account ToS
-        acceptance.
+        Exactly one of `card_token` or `bank_token` must be set. Both come
+        from the Stripe client SDK (`createToken` → `Card` ⇒ ``tok_…`` /
+        `BankAccount` ⇒ ``btok_…``). `client_ip` is required by Stripe for
+        Custom-account ToS acceptance.
 
         Flow:
           1. Ensure Custom account exists.
@@ -592,15 +605,24 @@ class StripeConnectService:
 
     # ─── Balance + payouts ───────────────────────────────────────────────
 
-    def get_available_cents(
+    def get_balance_breakdown(
         self, user: User, currency: str = "usd"
-    ) -> int:
-        """Balance eligible for the next scheduled daily payout, in cents.
+    ) -> tuple[int, int]:
+        """Return ``(available_cents, pending_cents)`` for the connected account.
 
-        Reads the `available` bucket (money that has cleared Stripe's
-        transaction-level holds and will go out on the account's daily
-        payout schedule). This is NOT `instant_available`; we no longer
-        run instant payouts.
+        Two buckets matter for the host UI:
+
+        * ``available`` — money that has cleared Stripe's per-transaction hold
+          and is queued for the next scheduled daily payout.
+        * ``pending``  — money that has been **received** for this account but
+          is still inside Stripe's standard hold period (typically ~2 business
+          days for US card payments). It will move to ``available`` automatically.
+
+        We sum BOTH because the mobile app labels the figure "Pending balance"
+        in the everyday English sense — i.e. "money you've collected but haven't
+        been paid out yet". Showing only ``available`` makes the screen read
+        $0.00 for the first couple days after every payment, which is what the
+        hosts have been complaining about.
         """
         if not user.stripe_account_id:
             raise StripeConnectError(
@@ -616,11 +638,27 @@ class StripeConnectService:
                 "STRIPE_ERROR", self._safe_stripe_message(e)
             )
 
-        total = 0
-        for entry in balance.available or []:
-            if entry.currency == currency:
-                total += int(entry.amount)
-        return total
+        def _sum(entries) -> int:
+            total = 0
+            for entry in entries or []:
+                if getattr(entry, "currency", None) == currency:
+                    total += int(getattr(entry, "amount", 0) or 0)
+            return total
+
+        available_cents = _sum(getattr(balance, "available", None))
+        pending_cents = _sum(getattr(balance, "pending", None))
+        return available_cents, pending_cents
+
+    def get_available_cents(
+        self, user: User, currency: str = "usd"
+    ) -> int:
+        """Backwards-compatible wrapper — only the cleared bucket.
+
+        Kept for any caller that still wants the strict "ready to pay out
+        tonight" figure. New code should prefer :meth:`get_balance_breakdown`.
+        """
+        available, _ = self.get_balance_breakdown(user, currency)
+        return available
 
     def list_payouts(self, user: User, limit: int = 20) -> list[Payout]:
         return (

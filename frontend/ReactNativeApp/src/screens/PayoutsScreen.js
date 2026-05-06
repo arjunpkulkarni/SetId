@@ -96,7 +96,14 @@ export default function PayoutsScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
 
   const [status, setStatus] = useState(null);
-  const [balanceCents, setBalanceCents] = useState(0);
+  // Two Stripe buckets contribute to "Pending balance":
+  //   • availableCents — funds queued for the next daily payout.
+  //   • pendingCents  — money just collected, still inside Stripe's
+  //                     2-business-day hold; rolls into `available` on its own.
+  // We sum them in the UI so a payment received minutes ago shows up here
+  // immediately instead of staying $0.00 until Stripe releases it.
+  const [availableCents, setAvailableCents] = useState(0);
+  const [pendingCents, setPendingCents] = useState(0);
   const [payouts, setPayouts] = useState([]);
 
   const mountedRef = useRef(true);
@@ -122,15 +129,19 @@ export default function PayoutsScreen({ navigation }) {
           stripeConnect.listPayouts().catch(() => null),
         ]);
         if (!mountedRef.current) return;
-        // Backend now returns `available_cents` (money eligible for the
-        // next daily payout). Falls back to the legacy
-        // `instant_available_cents` key for backwards compatibility with
-        // any older server still in rotation.
+        // Backend returns both `available_cents` (cleared, queued for the
+        // next daily payout) and `pending_cents` (just collected, still
+        // inside Stripe's standard hold). `instant_available_cents` is the
+        // legacy key from older server builds — kept as a final fallback.
         const b = balanceRes?.data ?? {};
-        setBalanceCents(b.available_cents ?? b.instant_available_cents ?? 0);
+        setAvailableCents(
+          b.available_cents ?? b.instant_available_cents ?? 0,
+        );
+        setPendingCents(b.pending_cents ?? 0);
         setPayouts(Array.isArray(payoutsRes?.data) ? payoutsRes.data : []);
       } else {
-        setBalanceCents(0);
+        setAvailableCents(0);
+        setPendingCents(0);
         // Still load history even if payouts are currently disabled —
         // user may want to see past successful payouts.
         const payoutsRes = await stripeConnect.listPayouts().catch(() => null);
@@ -149,8 +160,19 @@ export default function PayoutsScreen({ navigation }) {
       refreshAll().finally(() => {
         if (!cancelled) setLoading(false);
       });
+
+      // Light background poll while the screen is focused so a payment
+      // collected from a guest shows up here within seconds, without the
+      // host having to pull-to-refresh. Cleared on blur/unmount so we
+      // don't keep hammering the API in the background.
+      const interval = setInterval(() => {
+        if (cancelled) return;
+        refreshAll();
+      }, 8000);
+
       return () => {
         cancelled = true;
+        clearInterval(interval);
       };
     }, [refreshAll]),
   );
@@ -291,10 +313,16 @@ export default function PayoutsScreen({ navigation }) {
     );
     const nextArrival = formatArrivalDate(nextPayout?.arrival_date);
 
+    // Headline = cleared + on-hold. Guests' payments land in `pending`
+    // immediately and roll into `available` once Stripe releases them
+    // (typically ~2 business days). Summing both is what makes a freshly
+    // collected payment show up here without delay.
+    const totalCents = availableCents + pendingCents;
+
     return (
       <View style={[styles.balanceCard, shadows.card]}>
         <Text style={styles.balanceLabel}>Pending balance</Text>
-        <Text style={styles.balanceAmount}>{formatUsd(balanceCents)}</Text>
+        <Text style={styles.balanceAmount}>{formatUsd(totalCents)}</Text>
 
         {!status?.connected ? (
           <TouchableOpacity

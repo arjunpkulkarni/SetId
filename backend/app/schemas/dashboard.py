@@ -25,6 +25,17 @@ class ActiveBillSummary(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime | None = None
+    # ── Whose bill is this, and how complete is it overall? ───────────────
+    # `is_host` lets the dashboard pick the right "complete" rule per bill:
+    #   - Host: everyone has paid their share (`bill_remaining` ≈ 0).
+    #   - Guest: they personally have paid (`remaining` ≈ 0).
+    # `bill_paid` / `bill_remaining` aggregate across all NON-host members,
+    # so the host's row (which is always 0/0 in the per-member view) doesn't
+    # mask the fact that real money has been collected. Default to 0 so old
+    # clients without these fields keep working.
+    is_host: bool = False
+    bill_paid: Decimal = Decimal("0")
+    bill_remaining: Decimal = Decimal("0")
 
 
 class RecentActivity(BaseModel):

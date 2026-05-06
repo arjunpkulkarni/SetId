@@ -422,8 +422,12 @@ export const stripeConnect = {
   updatePayoutCard: (payload) =>
     client.post('/stripe/connect/external-account', payload),
 
-  /** Pending-balance in cents — the amount that will go out in the next
-   *  scheduled daily payout. Returns `{ available_cents, currency }`. */
+  /** Pending-balance in cents. Returns
+   *  `{ available_cents, pending_cents, currency }` where `pending_cents`
+   *  is money received for this account that is still inside Stripe's
+   *  standard 2-business-day hold and will roll into `available_cents`
+   *  automatically. The Payouts UI sums both so a freshly collected payment
+   *  shows up immediately. */
   getBalance: () => client.get('/stripe/connect/balance'),
 
   /** Last 20 payouts for the current user (history / next-arrival). */

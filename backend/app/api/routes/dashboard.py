@@ -166,6 +166,31 @@ def _remaining_for(
     return remaining if remaining > 0 else _ZERO
 
 
+def _bill_wide_totals(
+    bill: Bill,
+    agg: _DashboardAggregates,
+) -> tuple[Decimal, Decimal]:
+    """Sum (paid, remaining) across all NON-host members of a bill.
+
+    The per-member ``your_share`` / ``paid`` / ``remaining`` fields on the
+    dashboard summary describe a single user's row, which is misleading for
+    hosts — the host's row is always 0 because they don't owe themselves
+    anything. To know whether a bill is *actually* done collecting, callers
+    need the rollup across the people the host is collecting from. This
+    helper produces exactly that, mirroring the "owed to you" calculation
+    in :func:`_build_overview` so both numbers stay consistent.
+    """
+    members = agg.members_by_bill.get(bill.id, [])
+    bill_paid_total = _ZERO
+    bill_remaining_total = _ZERO
+    for m in members:
+        if str(m.user_id) == str(bill.owner_id):
+            continue
+        bill_paid_total += agg.paid_by_member.get(m.id, _ZERO)
+        bill_remaining_total += _remaining_for(m.id, agg)
+    return bill_paid_total, bill_remaining_total
+
+
 def _build_overview(user_id: str, agg: _DashboardAggregates) -> DashboardOverview:
     total_bills = len(agg.bills)
     active_bills_count = sum(
@@ -220,6 +245,8 @@ def _build_active_bill_summaries(
             paid = _ZERO
             remaining = _ZERO
 
+        bill_paid_total, bill_remaining_total = _bill_wide_totals(bill, agg)
+
         summaries.append(
             ActiveBillSummary(
                 id=bill.id,
@@ -233,6 +260,9 @@ def _build_active_bill_summaries(
                 status=bill.status,
                 created_at=bill.created_at,
                 updated_at=bill.updated_at,
+                is_host=str(bill.owner_id) == user_id,
+                bill_paid=bill_paid_total,
+                bill_remaining=bill_remaining_total,
             ).model_dump()
         )
 
@@ -270,6 +300,8 @@ def _build_past_bill_summaries(
             paid = _ZERO
             remaining = _ZERO
 
+        bill_paid_total, bill_remaining_total = _bill_wide_totals(bill, agg)
+
         summaries.append(
             ActiveBillSummary(
                 id=bill.id,
@@ -283,6 +315,9 @@ def _build_past_bill_summaries(
                 status=bill.status,
                 created_at=bill.created_at,
                 updated_at=bill.updated_at,
+                is_host=str(bill.owner_id) == user_id,
+                bill_paid=bill_paid_total,
+                bill_remaining=bill_remaining_total,
             ).model_dump()
         )
 

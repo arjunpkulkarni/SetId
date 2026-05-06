@@ -104,6 +104,33 @@ function pastBillStatusLabel(status) {
   return `${status}`.replace(/_/g, ' ');
 }
 
+/**
+ * "Done but not yet finalized" — every share owed has been paid, but the
+ * host hasn't tapped *Mark bill completed* yet (which would flip the bill to
+ * `settled` and route it through Recent activity instead).
+ *
+ * Two perspectives, both backed by fields the dashboard endpoint now returns:
+ *   - Host: collected everything from non-host members
+ *     (`bill_remaining ≈ 0` and we have actually collected at least
+ *     something, so a brand-new draft with zero items doesn't masquerade
+ *     as complete).
+ *   - Guest: their own share is paid (`remaining ≈ 0`).
+ *
+ * We use a half-cent tolerance to absorb floating-point drift between the
+ * dashboard payload (Decimal → JSON string → parseFloat) and the DB.
+ */
+function isBillComplete(bill) {
+  if (!bill) return false;
+  if (bill.is_host) {
+    const billPaid = parseFloat(bill.bill_paid ?? 0);
+    const billRemaining = parseFloat(bill.bill_remaining ?? 0);
+    return billPaid > 0 && billRemaining <= 0.005;
+  }
+  const yourShare = parseFloat(bill.your_share ?? 0);
+  const remaining = parseFloat(bill.remaining ?? 0);
+  return yourShare > 0 && remaining <= 0.005;
+}
+
 /** Feed the Recent activity list from non-active bills returned on `/dashboard`. */
 function mapPastBillsToActivityItems(pastBills) {
   return (pastBills ?? []).map((b) => ({
@@ -402,6 +429,63 @@ function SecondaryBillCard({ bill, onOpenBill }) {
   );
 }
 
+/**
+ * Card variant shown inside the "Bill complete" section. Visually celebratory
+ * (green check + filled mint background) and replaces the Settle Now CTA with
+ * a quiet status row, since there's nothing for the user to act on except
+ * optionally finalizing the bill (handled inside the bill detail screen).
+ */
+function CompletedBillCard({ bill, onOpenBill }) {
+  if (!bill) return null;
+  const collected = parseFloat(
+    bill.is_host ? (bill.bill_paid ?? 0) : (bill.paid ?? 0),
+  );
+  return (
+    <TouchableOpacity
+      style={[styles.completedCard, shadows.card]}
+      activeOpacity={0.92}
+      onPress={() => onOpenBill(bill)}
+    >
+      <View style={styles.completedIconWrap}>
+        <MaterialIcons name="check-circle" size={22} color={DASHBOARD_GREEN} />
+      </View>
+      <View style={styles.completedInfo}>
+        <Text style={styles.completedTitle} numberOfLines={1}>
+          {bill.title || bill.merchant_name}
+        </Text>
+        <Text style={styles.completedSubtitle}>
+          {bill.is_host
+            ? `All ${bill.member_count} ${bill.member_count === 1 ? 'member' : 'members'} paid · ${formatCurrency(collected)} collected`
+            : `You paid ${formatCurrency(collected)} · awaiting host`}
+        </Text>
+      </View>
+      <View style={styles.completedBadge}>
+        <Text style={styles.completedBadgeText}>Paid</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function BillCompleteSection({ bills, onOpenBill, onDelete }) {
+  if (!bills || bills.length === 0) return null;
+
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Bill complete</Text>
+      </View>
+      {bills.map((bill, idx) => (
+        <React.Fragment key={bill.id}>
+          <SwipeToDeleteBill bill={bill} onDelete={onDelete}>
+            <CompletedBillCard bill={bill} onOpenBill={onOpenBill} />
+          </SwipeToDeleteBill>
+          {idx !== bills.length - 1 && <View style={styles.billCardGap} />}
+        </React.Fragment>
+      ))}
+    </View>
+  );
+}
+
 function ActiveBillsSection({ bills, onSettle, onDelete, onOpenBill, onViewAll, isLoading }) {
   // While the backend is cold-starting, show a card-shaped spinner so the
   // page layout stays stable instead of collapsing to an empty state.
@@ -628,8 +712,28 @@ export default function DashboardScreen({ navigation }) {
   } = useGetDashboardQuery();
 
   const overview = data?.overview ?? null;
-  const activeBills = data?.activeBills ?? [];
+  const rawActiveBills = data?.activeBills ?? [];
   const pastBills = data?.pastBills ?? [];
+
+  // Split `active` bills the server returns into two buckets:
+  //   • `activeBills` — still collecting (rendered with Settle Now CTA).
+  //   • `completedActiveBills` — every share paid, but the host hasn't
+  //     tapped Mark bill completed yet, so the bill row is technically
+  //     still `active`. We give those their own "Bill complete" section
+  //     so the home screen doesn't keep nagging the user with a Settle Now
+  //     button on a bill that has nothing left to settle.
+  const { activeBills, completedActiveBills } = useMemo(() => {
+    const inProgress = [];
+    const complete = [];
+    for (const bill of rawActiveBills) {
+      if (isBillComplete(bill)) {
+        complete.push(bill);
+      } else {
+        inProgress.push(bill);
+      }
+    }
+    return { activeBills: inProgress, completedActiveBills: complete };
+  }, [rawActiveBills]);
 
   // Per-section loading flags. We *don't* gate the whole page on these —
   // the layout always renders so the user immediately sees their name,
@@ -640,8 +744,11 @@ export default function DashboardScreen({ navigation }) {
   // a brief flash of a stale "$0.00" while the AsyncStorage read is
   // resolving on cold launch.
   const balanceLoading = !overview && (dashboardLoading || !hydrated);
+  // Base the inline loader on the *raw* bill list so a dashboard with only
+  // completed bills doesn't flash a "Loading your bills…" spinner where the
+  // (now empty) Active Bills section sits.
   const billsLoadingInline =
-    activeBills.length === 0 && (dashboardLoading || !hydrated);
+    rawActiveBills.length === 0 && (dashboardLoading || !hydrated);
   const recentActivity = useMemo(
     () => mapPastBillsToActivityItems(pastBills),
     [pastBills],
@@ -797,6 +904,11 @@ export default function DashboardScreen({ navigation }) {
           onOpenBill={handleOpenBill}
           onViewAll={handleViewAllBills}
           isLoading={billsLoadingInline}
+        />
+        <BillCompleteSection
+          bills={completedActiveBills}
+          onOpenBill={handleOpenBill}
+          onDelete={handleDeleteBill}
         />
         <RecentActivitySection
           activities={recentActivity}
@@ -1151,6 +1263,58 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.onSurfaceVariant,
     marginTop: 3,
+  },
+
+  // ── Bill complete card ──────────────────────────────────────────────
+  // Same shape as `secondaryCard` so the layout stays calm, but with a
+  // mint check-circle and a small "Paid" badge so the user can tell at a
+  // glance that the bill is done collecting.
+  completedCard: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: radii.xl,
+    paddingVertical: 18,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  completedIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: MINT_ICON_BG,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  completedInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  completedTitle: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  completedSubtitle: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: colors.onSurfaceVariant,
+    marginTop: 3,
+  },
+  completedBadge: {
+    backgroundColor: DASHBOARD_GREEN,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radii.full,
+  },
+  completedBadgeText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    color: '#FFFFFF',
+    textTransform: 'uppercase',
   },
 
   activityCard: {

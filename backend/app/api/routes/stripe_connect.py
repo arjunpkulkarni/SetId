@@ -151,14 +151,24 @@ def get_balance(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Pending balance (what'll go out in the next daily payout)."""
+    """Pending balance — both cleared (`available`) and still-on-hold
+    (`pending`) funds.
+
+    The mobile app sums these into a single "Pending balance" headline so a
+    host sees money they've just collected immediately, rather than waiting
+    for Stripe to release it from the standard 2-business-day hold.
+    """
     try:
         svc = StripeConnectService(db)
-        cents = svc.get_available_cents(current_user)
+        available_cents, pending_cents = svc.get_balance_breakdown(current_user)
     except StripeConnectError as e:
         return _to_error(e)
     return success_response(
-        data=BalanceOut(available_cents=cents, currency="usd").model_dump()
+        data=BalanceOut(
+            available_cents=available_cents,
+            pending_cents=pending_cents,
+            currency="usd",
+        ).model_dump()
     )
 
 

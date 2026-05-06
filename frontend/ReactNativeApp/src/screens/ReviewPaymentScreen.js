@@ -140,6 +140,43 @@ function CashSection({ onMarkPaid }) {
   );
 }
 
+// Replaces the "Did someone pay in cash?" CTA once every share is collected.
+// Shown when the collection progress bar has hit 100%, so the host gets a
+// clear "you're done — finalize the bill" affordance instead of a now-useless
+// mark-as-paid button.
+function AllPaidSection({ onMarkCompleted, completing }) {
+  return (
+    <View style={styles.allPaidSection}>
+      <View style={styles.allPaidIconWrap}>
+        <MaterialIcons name="check-circle" size={40} color={colors.secondary} />
+      </View>
+      <Text style={styles.allPaidTitle}>Bill complete</Text>
+      <Text style={styles.allPaidSubtext}>
+        All payments received. You can finalize this bill to move it out of
+        your active list.
+      </Text>
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={onMarkCompleted}
+        disabled={completing}
+        style={[
+          styles.allPaidButton,
+          completing && styles.allPaidButtonDisabled,
+        ]}
+      >
+        {completing ? (
+          <ActivityIndicator color={colors.onSecondary} />
+        ) : (
+          <>
+            <MaterialIcons name="check" size={18} color={colors.onSecondary} />
+            <Text style={styles.allPaidButtonText}>Mark bill completed</Text>
+          </>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 export default function ReviewPaymentScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
@@ -151,6 +188,7 @@ export default function ReviewPaymentScreen({ navigation, route }) {
   const [hostShare, setHostShare] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [unlockBusy, setUnlockBusy] = useState(false);
+  const [completing, setCompleting] = useState(false);
 
   const load = useCallback(async (isBackgroundRefresh = false) => {
     if (!billId) return;
@@ -338,6 +376,11 @@ export default function ReviewPaymentScreen({ navigation, route }) {
   const totalCollected = participants.reduce((s, p) => s + (p.amountPaid || 0), 0);
   const totalRemaining = Math.max(0, amountToCollect - totalCollected);
   const percent = amountToCollect > 0 ? Math.round((totalCollected / amountToCollect) * 100) : 0;
+  // True once every guest share has been settled. We use a half-cent slop so
+  // floating-point rounding doesn't keep the screen stuck at 99% when totals
+  // line up. `amountToCollect > 0` keeps host-only bills (where there's
+  // nothing to collect) from masquerading as "complete".
+  const allPaid = amountToCollect > 0 && totalRemaining <= 0.005;
 
   const runUnlockGuestPay = async (force) => {
     if (!billId) return;
@@ -375,6 +418,35 @@ export default function ReviewPaymentScreen({ navigation, route }) {
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Allow payments', onPress: () => runUnlockGuestPay(false) },
+      ],
+    );
+  };
+
+  const handleMarkBillCompleted = () => {
+    if (!billId || completing) return;
+    Alert.alert(
+      'Mark bill completed?',
+      'This moves the bill out of your active list. You can still view it from Activity.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Mark completed',
+          style: 'default',
+          onPress: async () => {
+            if (completing) return;
+            setCompleting(true);
+            try {
+              await billsApi.update(billId, { status: 'settled' });
+              navigation.goBack();
+            } catch (err) {
+              setCompleting(false);
+              Alert.alert(
+                'Could not update bill',
+                err?.error?.message ?? err?.message ?? 'Please try again.',
+              );
+            }
+          },
+        },
       ],
     );
   };
@@ -422,8 +494,10 @@ export default function ReviewPaymentScreen({ navigation, route }) {
         }
       >
         {/* Locked-state banner: pinned above everything else so the host
-            can never miss the "guests are blocked, tap to allow" CTA. */}
-        {!guestPayUnlocked && (
+            can never miss the "guests are blocked, tap to allow" CTA.
+            Suppressed once everyone has paid — there's no longer anything
+            for guests to unlock. */}
+        {!guestPayUnlocked && !allPaid && (
           <View style={styles.lockedBanner}>
             <View style={styles.lockedBannerHeader}>
               <View style={styles.lockedBannerIconWrap}>
@@ -459,7 +533,9 @@ export default function ReviewPaymentScreen({ navigation, route }) {
           <View style={styles.billHeaderLeft}>
             <Text style={styles.billTitle}>{billTitle}</Text>
             <Text style={styles.billSubtitle}>
-              {memberCount} member{memberCount !== 1 ? 's' : ''} owe you
+              {allPaid
+                ? `All ${memberCount} member${memberCount !== 1 ? 's' : ''} paid`
+                : `${memberCount} member${memberCount !== 1 ? 's' : ''} owe you`}
             </Text>
           </View>
           <View style={styles.billHeaderRight}>
@@ -468,7 +544,7 @@ export default function ReviewPaymentScreen({ navigation, route }) {
           </View>
         </View>
 
-        {guestPayUnlocked && (
+        {guestPayUnlocked && !allPaid && (
           <View style={styles.guestPayCard}>
             <MaterialIcons name="lock-open" size={22} color={colors.secondary} />
             <View style={styles.guestPayCopy}>
@@ -517,8 +593,17 @@ export default function ReviewPaymentScreen({ navigation, route }) {
           ))}
         </View>
 
-        {/* Cash section */}
-        <CashSection onMarkPaid={handleMarkPaid} />
+        {/* Cash CTA only makes sense while there are still unpaid shares.
+            Once the collection bar hits 100% we flip to a "bill complete"
+            success state with a finalize-bill button instead. */}
+        {allPaid ? (
+          <AllPaidSection
+            onMarkCompleted={handleMarkBillCompleted}
+            completing={completing}
+          />
+        ) : (
+          <CashSection onMarkPaid={handleMarkPaid} />
+        )}
       </ScrollView>
     </View>
   );
@@ -951,5 +1036,64 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: colors.secondary,
+  },
+
+  // "Bill complete · All payments received" success state. Replaces the
+  // "Did someone pay in cash?" card once everyone has settled. Visually
+  // distinct (filled secondary container + check icon) so it reads as a
+  // celebration rather than another action prompt.
+  allPaidSection: {
+    backgroundColor: colors.secondaryContainer,
+    borderRadius: radii.xl,
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    marginBottom: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+  },
+  allPaidIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.surfaceContainerLowest,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  allPaidTitle: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    color: colors.onSecondaryContainer ?? colors.onBackground,
+    marginBottom: 6,
+  },
+  allPaidSubtext: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: colors.onSurfaceVariant,
+    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: 18,
+  },
+  allPaidButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    width: '100%',
+    paddingVertical: 14,
+    backgroundColor: colors.secondary,
+    borderRadius: radii.full,
+  },
+  allPaidButtonDisabled: {
+    opacity: 0.6,
+  },
+  allPaidButtonText: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.onSecondary,
   },
 });
