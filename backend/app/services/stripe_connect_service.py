@@ -22,12 +22,20 @@ to daily at account-creation time (see `ensure_connected_account`), so
 Stripe issues payouts automatically — the app only surfaces pending
 balance + arrival date.
 
-Fees (out of our control):
-  - Stripe's per-PaymentIntent fee (~2.9% + $0.30 US) — deducted before
-    funds land in host's Connect balance.
+Fees:
+  - Stripe's per-PaymentIntent fee (~2.9% + $0.30 US). On a destination
+    charge with `application_fee_amount` set, Stripe deducts this fee
+    from the platform's portion (i.e. our application fee) — NOT from
+    the host's slice. So sizing the platform fee correctly is what
+    keeps the host whole.
   - No instant-payout fee (daily standard payouts are free).
   - Our `application_fee_amount` on the PaymentIntent (see
-    `PaymentService` + `settings.PLATFORM_FEE_BPS`) — the platform's cut.
+    `PaymentService._application_fee_for_member`). Equal to the
+    per-guest share of `bill.service_fee` — matches the "Service fee"
+    line shown on the bill breakdown so the guest, host, and platform
+    all see the same number. `settings.PLATFORM_FEE_BPS` is a
+    fallback flat-rate knob used only when the bill has no
+    `service_fee` configured (e.g. legacy bills).
 """
 
 import logging

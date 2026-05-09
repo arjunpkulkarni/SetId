@@ -1,13 +1,15 @@
 import logging
 import secrets
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
+from sqlalchemy import func as _sa_func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.bill import Bill
 from app.models.bill_member import BillMember
+from app.models.item_assignment import ItemAssignment
 from app.models.payment import Payment
 from app.models.user import User
 
@@ -15,16 +17,89 @@ logger = logging.getLogger(__name__)
 
 
 def _platform_fee_cents(amount_cents: int) -> int:
-    """Platform's cut, in cents, computed from `PLATFORM_FEE_BPS`.
+    """Flat-rate fallback for the platform fee, in cents.
+
+    Used only when we can't compute a per-guest service-fee share from
+    the bill (e.g. the bill has no `service_fee` set yet, no subtotal,
+    or the member has no item assignments). Reads `PLATFORM_FEE_BPS`
+    so an operator can still force a flat % across all charges if they
+    don't want to rely on the bill-level `service_fee` field.
 
     Returns 0 when unconfigured. Rounded down to the cent (favors the
     host on the rounding boundary). Stripe's own per-transaction fee is
-    separate and always applies regardless.
+    separate and is debited from the platform's portion of a destination
+    charge automatically.
     """
     bps = int(settings.PLATFORM_FEE_BPS or 0)
     if bps <= 0 or amount_cents <= 0:
         return 0
     return (amount_cents * bps) // 10_000
+
+
+def _application_fee_for_member(
+    db: Session,
+    bill_id: str,
+    member_id: str,
+    amount_cents: int,
+) -> int:
+    """Per-guest platform cut to pass as Stripe `application_fee_amount`.
+
+    On a destination charge, Stripe routes the full `amount` to the
+    connected account UNLESS we tell it to siphon a slice into the
+    platform's own balance via `application_fee_amount`. Without this,
+    the entire "Service fee" line we're displaying on the bill ends up
+    in the host's Connect balance — which is precisely the bug the
+    Payouts UI was reporting (Settld absorbing Stripe's processing fee
+    while the host received the gross amount).
+
+    The fee we collect here mirrors what
+    :meth:`CalculationService.get_balance_breakdown` allocates to this
+    member as their ``fee_share`` of ``bill.service_fee`` — i.e. the
+    SAME number we already showed the guest in their bill breakdown.
+    Critically it does NOT include ``receipt_extra_fees`` (those are
+    fees printed on the original receipt, e.g. mandatory tip in NYC,
+    facility fees — they belong to the host, not the platform).
+
+    Math::
+
+        member_subtotal = sum(ItemAssignment.amount_owed for member)
+        proportion      = member_subtotal / bill.subtotal
+        fee_share       = round(proportion * bill.service_fee)
+        application_fee = int(fee_share * 100)   # cents
+
+    Falls back to :func:`_platform_fee_cents` (the BPS knob) when the
+    inputs aren't there to do the proportional math, so we never
+    silently drop the platform cut on legacy / partially-built bills.
+
+    The result is clamped to ``[0, amount_cents]`` since Stripe rejects
+    an application fee greater than the charge.
+    """
+    bill = db.query(Bill).filter(Bill.id == bill_id).first()
+    if bill is None:
+        return _platform_fee_cents(amount_cents)
+
+    bill_service_fee = bill.service_fee or Decimal("0")
+    bill_subtotal = bill.subtotal or Decimal("0")
+    if bill_service_fee <= 0 or bill_subtotal <= 0:
+        return _platform_fee_cents(amount_cents)
+
+    member_subtotal_raw = (
+        db.query(_sa_func.coalesce(_sa_func.sum(ItemAssignment.amount_owed), 0))
+        .filter(ItemAssignment.bill_member_id == member_id)
+        .scalar()
+    )
+    member_subtotal = Decimal(str(member_subtotal_raw or 0))
+    if member_subtotal <= 0:
+        # Member has no assignments yet — fall back rather than charge a
+        # phantom fee on what's effectively a $0 share.
+        return _platform_fee_cents(amount_cents)
+
+    proportion = member_subtotal / bill_subtotal
+    fee_share = (proportion * bill_service_fee).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    fee_cents = int(fee_share * 100)
+    return max(0, min(fee_cents, amount_cents))
 
 
 def _stripe_intent_for_payment(
@@ -34,6 +109,7 @@ def _stripe_intent_for_payment(
     currency: str,
     *,
     destination_account_id: str | None = None,
+    application_fee_cents: int = 0,
 ) -> tuple[str, str]:
     """Create (or mock) a Stripe PaymentIntent for a guest's share.
 
@@ -43,6 +119,16 @@ def _stripe_intent_for_payment(
     funds to the host's connected account balance (minus Stripe's
     per-txn fee and our `application_fee_amount`). This is what lets the
     host later run an instant payout to their debit card.
+
+    `application_fee_cents` is the slice of `amount` we siphon into the
+    PLATFORM's balance (Settld). Computed by the caller via
+    :func:`_application_fee_for_member` so it matches the per-guest
+    `fee_share` we already showed on the bill breakdown — i.e. the
+    "Service fee" line on the receipt actually flows to Settld instead
+    of routing to the host along with the rest of the charge. Stripe
+    debits its own per-charge processing fee from this same platform
+    portion, which is why `SERVICE_FEE_PERCENTAGE` is sized to cover
+    both Stripe's cut and Settld's margin.
 
     When `destination_account_id` is None, the PaymentIntent lands in the
     platform's balance with no automatic routing — same as the legacy
@@ -66,11 +152,17 @@ def _stripe_intent_for_payment(
 
         if destination_account_id:
             # Destination charge — money routes to the host's connected
-            # account. `application_fee_amount` is our platform's cut.
+            # account. `application_fee_amount` is our platform's cut and
+            # is also where Stripe debits its per-charge processing fee
+            # from, so this slice ends up as (service_fee - stripe_fee)
+            # on the platform's balance.
             intent_kwargs["transfer_data"] = {"destination": destination_account_id}
-            app_fee = _platform_fee_cents(amount_in_cents)
+            # Defensive clamp: never exceed the charge amount or Stripe
+            # rejects the call.
+            app_fee = max(0, min(int(application_fee_cents or 0), amount_in_cents))
             if app_fee > 0:
                 intent_kwargs["application_fee_amount"] = app_fee
+                intent_kwargs["metadata"]["application_fee_cents"] = str(app_fee)
             intent_kwargs["metadata"]["destination_account_id"] = destination_account_id
         else:
             # No host account on file → funds stay on platform balance.
@@ -199,6 +291,18 @@ class PaymentService:
         # to their debit card from the Payouts screen.
         destination = _lookup_host_destination(self.db, bill_id)
 
+        # Compute the platform fee for this specific guest's share so
+        # `application_fee_amount` matches the "Service fee" line we
+        # already showed them on the bill. Skipped when there's no
+        # destination — without a Connect account there's no platform
+        # vs. host split to make.
+        amount_cents = int(amount * 100)
+        app_fee_cents = (
+            _application_fee_for_member(self.db, bill_id, member_id, amount_cents)
+            if destination
+            else 0
+        )
+
         try:
             stripe_pi_id, stripe_client_secret = _stripe_intent_for_payment(
                 bill_id,
@@ -206,6 +310,7 @@ class PaymentService:
                 amount,
                 currency,
                 destination_account_id=destination,
+                application_fee_cents=app_fee_cents,
             )
         except ValueError as e:
             # Re-raise ValueError from Stripe errors
@@ -265,6 +370,17 @@ class PaymentService:
             raise ValueError("Payment amount is invalid or missing")
 
         destination = _lookup_host_destination(self.db, str(payment.bill_id))
+        amount_cents = int((payment.amount or Decimal("0")) * 100)
+        app_fee_cents = (
+            _application_fee_for_member(
+                self.db,
+                str(payment.bill_id),
+                str(payment.bill_member_id),
+                amount_cents,
+            )
+            if destination
+            else 0
+        )
 
         try:
             stripe_pi_id, stripe_client_secret = _stripe_intent_for_payment(
@@ -273,6 +389,7 @@ class PaymentService:
                 payment.amount,
                 payment.currency or "USD",
                 destination_account_id=destination,
+                application_fee_cents=app_fee_cents,
             )
         except ValueError as e:
             # Re-raise with more context

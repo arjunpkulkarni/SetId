@@ -128,10 +128,28 @@ class Settings(BaseSettings):
     TEST_PHONE_NUMBERS: list[str] = []
     TEST_OTP_CODE: str = "424242"
 
-    # Service fee defaults (can be overridden per-bill)
+    # Service fee defaults (can be overridden per-bill).
+    #
+    # `SERVICE_FEE_PERCENTAGE` is the fraction of the bill subtotal we
+    # display to guests as "Service fee" and ALSO the amount we collect
+    # via Stripe `application_fee_amount` on the destination charge.
+    #
+    # 4.9% is sized to cover BOTH:
+    #   • Stripe's per-charge processing fee (~2.9% + $0.30) — which on
+    #     destination charges comes out of the platform's portion (i.e.
+    #     the application fee), not the host's.
+    #   • Settld's own ~1.5% margin (matches the "1.5% platform fee" line
+    #     in the marketing FAQ).
+    #
+    # Why the bump from 3.5% → 4.9%: at 3.5%, the entire fee was
+    # essentially eaten by Stripe's processing fee, leaving Settld
+    # break-even or slightly negative on small charges. The host was
+    # made whole, but the platform was paying Stripe out of pocket. See
+    # `payment_service._application_fee_for_member` for the per-guest
+    # math.
     SERVICE_FEE_TYPE: str = "percentage"  # "flat" or "percentage"
     SERVICE_FEE_FLAT_AMOUNT: float = 0.75  # $0.75 default flat fee
-    SERVICE_FEE_PERCENTAGE: float = 3.5  # 3.5% default percentage fee
+    SERVICE_FEE_PERCENTAGE: float = 4.9  # 4.9% default percentage fee
     # Public pay link TTL in minutes (0 = no expiry)
     PAY_LINK_TTL_MINUTES: int = 20
 
