@@ -61,6 +61,14 @@ class BillOut(BaseModel):
     guest_pay_unlocked: bool = False
     ready_reason: str | None = None
     ready_marked_at: datetime | None = None
+    # ── Original-currency snapshot ─────────────────────────────────────
+    # Populated by the receipt parser when the photo's native currency
+    # isn't USD. All three are null on USD-native bills. The mobile
+    # client uses these to render an "≈ Rp 500,000" hint under the
+    # USD total without re-running any math.
+    original_currency: str | None = None
+    original_total: Decimal | None = None
+    fx_rate_to_usd: Decimal | None = None
     created_at: datetime
     updated_at: datetime
 

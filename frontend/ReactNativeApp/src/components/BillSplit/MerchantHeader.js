@@ -13,10 +13,45 @@ function formatDate(dateStr) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// Format "Rp 500,000" / "€42.50" / "¥6,200" for the small hint we show
+// underneath the USD total when the receipt was scanned in a non-USD
+// currency. Uses Intl.NumberFormat so we get correct symbol placement
+// (some currencies prefix, some suffix) and correct fractional digits
+// (JPY/KRW/VND etc. have none, BHD/JOD have three) without a lookup
+// table on our side.
+function formatNativeAmount(amount, currency) {
+  const num = typeof amount === 'string' ? parseFloat(amount) : (amount ?? 0);
+  if (!Number.isFinite(num) || !currency) return '';
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+      currencyDisplay: 'narrowSymbol',
+    }).format(num);
+  } catch {
+    // Older RN runtimes / unknown currency code → fall back to a plain
+    // "<amount> <code>" so the hint still renders something useful.
+    return `${num.toLocaleString('en-US')} ${currency}`;
+  }
+}
+
 export function MerchantHeader({ bill }) {
   const billTitle = bill.title || bill.merchant_name;
   const merchant = bill.merchant_name || bill.title;
-  
+
+  // The receipt parser stamps these three fields on the bill ONLY when
+  // the photo was scanned in a non-USD currency (Bali / Singapore /
+  // London / etc.). The USD figure shown in the badge is already
+  // converted; this hint is purely so the host can sanity-check the
+  // conversion against the printed receipt.
+  const hasOriginal =
+    bill?.original_currency &&
+    bill.original_currency !== 'USD' &&
+    bill?.original_total != null;
+  const nativeHint = hasOriginal
+    ? formatNativeAmount(bill.original_total, bill.original_currency)
+    : '';
+
   return (
     <View style={styles.merchantHeader}>
       <View style={styles.merchantLeft}>
@@ -27,6 +62,11 @@ export function MerchantHeader({ bill }) {
       <View style={styles.totalBadge}>
         <Text style={styles.totalLabel}>Total</Text>
         <Text style={styles.totalAmount}>{formatCurrency(bill.total)}</Text>
+        {hasOriginal && nativeHint ? (
+          <Text style={styles.totalNativeHint} numberOfLines={1}>
+            ≈ {nativeHint}
+          </Text>
+        ) : null}
       </View>
     </View>
   );
@@ -87,5 +127,18 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
     color: colors.secondary,
+  },
+  // Small "≈ Rp 500,000" hint that sits below the USD total on bills
+  // scanned in a non-USD currency. Uses the same muted color as the
+  // "TOTAL" label so it doesn't compete visually with the headline.
+  totalNativeHint: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
+    fontWeight: '500',
+    color: colors.onSurfaceVariant,
+    marginTop: 4,
+    letterSpacing: 0.2,
+    maxWidth: 140,
+    textAlign: 'center',
   },
 });

@@ -38,6 +38,29 @@ class Bill(Base):
     total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # ── Original (pre-FX) snapshot for non-USD receipts ─────────────────
+    # When the receipt parser detects a non-USD currency (e.g. a host
+    # scans a bill in Bali / Singapore / London), the parser converts
+    # every amount to USD via the FX service and stores the converted
+    # values in `subtotal` / `tax` / `tip` / `total` etc. above. The
+    # three columns below capture the ORIGINAL currency + total + FX
+    # rate so the BillSplit screen can show "≈ Rp 500,000" underneath
+    # the USD total. They are display-only — no math reads from them.
+    #
+    # All three are nullable: USD-native bills (the vast majority) leave
+    # them empty.
+    original_currency: Mapped[str | None] = mapped_column(
+        String(3), nullable=True
+    )
+    original_total: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+    # 8 decimals so we don't lose precision on very-small or very-large
+    # exchange rates (e.g. ~24,000 IDR per USD vs ~0.00006 BHD per USD).
+    fx_rate_to_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 8), nullable=True
+    )
+
     # --- Readiness / payout gate ---
     ready_to_pay: Mapped[bool] = mapped_column(Boolean, default=False)
     ready_marked_at: Mapped[datetime | None] = mapped_column(

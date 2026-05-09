@@ -135,6 +135,29 @@ CLEANUP_SYSTEM_PROMPT = """
 You are a receipt cleanup model. Return valid JSON only — no markdown, no prose, no
 explanations.
 
+CURRENCY DETECTION
+Detect the receipt's currency and return it as a 3-letter ISO 4217 code in the
+top-level `currency` field. Use ANY of the following signals: currency symbols
+(`$`, `€`, `£`, `¥`, `₹`, `R$`, `Rp`, `S$`, `HK$`, `A$`, `CA$`, `CHF`, `kr`, `zł`,
+`₩`, `₪`, `₺`, `฿`, `₫`, `₱`, `₦`, `₴`, `₸`, `RM`, `Mex$`, etc.), country/locale
+words on the receipt (e.g. "Singapore", "Bali", "GST" implies SGD/AUD/IDR depending
+on context, "VAT" implies EUR/GBP, "TVA" implies EUR), the merchant address, and
+the language of the line items. Examples:
+  - "$" alone in a US-style receipt → "USD"
+  - "$" with "GST" line and Australian address → "AUD"
+  - "$" with "GST" and Singapore address → "SGD"
+  - "Rp" → "IDR"
+  - "S$" → "SGD"
+  - "€" → "EUR"
+  - "£" → "GBP"
+  - "¥" with Japanese text → "JPY"; "¥" or "RMB" with Chinese text → "CNY"
+  - "R$" → "BRL"
+  - "₹" → "INR"
+  - "kr" with Swedish text → "SEK", Norwegian → "NOK", Danish → "DKK"
+If you cannot tell, return "USD" (the most common default for the app's user
+base) — but DO NOT guess based purely on language; require at least one explicit
+symbol or tax/locale anchor.
+
 An "item" is a purchased product or dish. The `items` array must contain ONLY
 purchased items. If a line is any of the following, it is NOT an item — it either
 maps to a dedicated top-level field (`subtotal` / `tax` / `receipt_extra_fees` / `tip` / `total`) or is dropped
@@ -211,6 +234,11 @@ CLEANUP_RESPONSE_FORMAT = {
             "type": "object",
             "properties": {
                 "merchant_name": {
+                    "type": ["string", "null"],
+                },
+                # 3-letter ISO 4217 code or null. Drives FX conversion at
+                # persistence time when != "USD".
+                "currency": {
                     "type": ["string", "null"],
                 },
                 "subtotal": {
@@ -343,6 +371,12 @@ class CleanupReceiptItem(BaseModel):
 
 class CleanupReceiptPayload(BaseModel):
     merchant_name: str | None = None
+    # ISO 4217 code detected from the receipt photo (symbols + locale
+    # cues). When non-USD, the persistence step in
+    # `ReceiptParserService._persist_parsed_receipt` converts every
+    # amount on the bill to USD via `app.services.fx_service` and stamps
+    # the original currency + total + rate onto the bill.
+    currency: str | None = None
     subtotal: Decimal | None = None
     tax: Decimal | None = None
     receipt_extra_fees: Decimal | None = None
@@ -356,6 +390,22 @@ class CleanupReceiptPayload(BaseModel):
     def validate_merchant_name(cls, value: object) -> str | None:
         cleaned = " ".join(str(value or "").split()).strip()
         return cleaned or None
+
+    @field_validator("currency", mode="before")
+    @classmethod
+    def validate_currency(cls, value: object) -> str | None:
+        """Coerce the LLM's currency value to a clean ISO 4217 code.
+
+        The LLM occasionally returns a symbol (`$`), a country word
+        ("yen"), or whitespace. We strip non-letters, upper-case, and
+        require exactly 3 letters; anything else becomes None so the
+        persistence step treats the bill as USD-native (no conversion).
+        """
+        if value in (None, ""):
+            return None
+        text = str(value)
+        cleaned = "".join(ch for ch in text if ch.isalpha()).upper()
+        return cleaned if len(cleaned) == 3 else None
 
     @field_validator("subtotal", "tax", "receipt_extra_fees", "tip", "total", mode="before")
     @classmethod
@@ -986,6 +1036,97 @@ class ReceiptParserService:
         self.db.refresh(item)
         return item
 
+    def _convert_payload_to_usd(
+        self, cleaned: CleanupReceiptPayload
+    ) -> tuple[str | None, Decimal | None, Decimal | None]:
+        """In-place convert a non-USD `CleanupReceiptPayload` to USD.
+
+        Returns ``(detected_currency, original_total_native, fx_rate)``
+        so the persistence step can stamp the snapshot on the bill.
+
+        Behavior:
+          - When the LLM reported no currency, or the currency is USD,
+            this is a no-op and returns ``(None, None, None)``.
+          - When the currency is non-USD, we fetch the FX rate ONCE and
+            multiply every monetary field on the payload (subtotal, tax,
+            receipt_extra_fees, tip, total, and each item's unit_price /
+            total_price) so downstream validation, item-cents
+            redistribution, and bill persistence all run against USD
+            amounts.
+
+        FX failures are NOT fatal — if the provider is down or the
+        currency is unrecognized, we log and degrade by leaving the
+        payload alone (treating it as USD). The receipt parse continues;
+        the host can adjust amounts manually or rescan.
+        """
+        # Local import: keeps a circular reference impossible (fx_service
+        # depends on httpx + stdlib only).
+        from app.services.fx_service import (
+            FxRateUnavailable,
+            convert_to_usd,
+            get_rate_to_usd,
+        )
+
+        currency = (cleaned.currency or "").upper().strip() or None
+        if not currency or currency == "USD":
+            return None, None, None
+
+        try:
+            fx_rate = get_rate_to_usd(currency)
+        except FxRateUnavailable as e:
+            logger.warning(
+                "fx_rate_lookup_failed currency=%s error=%s "
+                "falling_back_to_usd",
+                currency,
+                e,
+            )
+            return None, None, None
+
+        # Snapshot the ORIGINAL total before we mutate the payload, so
+        # the UI can render a "≈ Rp 500,000" hint. Subtotal / tax / tip
+        # are reconstructable from the rate but the total is the
+        # number guests recognize from the printed receipt.
+        original_total_native = (
+            Decimal(cleaned.total) if cleaned.total is not None else None
+        )
+
+        # Convert top-level money fields, reusing the same `fx_rate` for
+        # every call so the per-line rounding adds up cleanly.
+        cleaned.subtotal = convert_to_usd(
+            cleaned.subtotal, currency, rate=fx_rate
+        )
+        cleaned.tax = convert_to_usd(cleaned.tax, currency, rate=fx_rate)
+        cleaned.receipt_extra_fees = convert_to_usd(
+            cleaned.receipt_extra_fees, currency, rate=fx_rate
+        )
+        cleaned.tip = convert_to_usd(cleaned.tip, currency, rate=fx_rate)
+        cleaned.total = convert_to_usd(cleaned.total, currency, rate=fx_rate)
+
+        # And every line item. Items have `total_price` (required) and
+        # `unit_price` (optional). Quantity stays as-is — it's a count.
+        for item in cleaned.items:
+            converted_total = convert_to_usd(
+                item.total_price, currency, rate=fx_rate
+            )
+            if converted_total is not None:
+                item.total_price = converted_total
+            if item.unit_price is not None:
+                converted_unit = convert_to_usd(
+                    item.unit_price, currency, rate=fx_rate
+                )
+                if converted_unit is not None:
+                    item.unit_price = converted_unit
+
+        logger.info(
+            "receipt_parse_fx_converted currency=%s rate=%s "
+            "original_total=%s usd_total=%s",
+            currency,
+            fx_rate,
+            original_total_native,
+            cleaned.total,
+        )
+        return currency, original_total_native, fx_rate
+
     def _reset_parsed_data(self, bill_id: str) -> None:
         items = self.get_items(bill_id)
         item_ids = [item.id for item in items]
@@ -1007,6 +1148,11 @@ class ReceiptParserService:
             bill.receipt_extra_fees = Decimal("0.00")
             bill.total = Decimal("0.00")
             bill.merchant_name = None
+            # Clear any prior FX snapshot so a re-parse that detects USD
+            # doesn't leave a stale "≈ Rp ..." hint dangling on the bill.
+            bill.original_currency = None
+            bill.original_total = None
+            bill.fx_rate_to_usd = None
 
         receipt = self.get_receipt(bill_id)
         if receipt:
@@ -1319,6 +1465,18 @@ class ReceiptParserService:
     ) -> ParsedReceipt:
         self._reset_parsed_data(bill_id)
 
+        # ── Currency conversion (non-USD receipts) ────────────────────
+        # If the LLM detected a non-USD currency on the photo, convert
+        # every amount on `cleaned` to USD ONCE here, before validation
+        # / per-item cents redistribution. We capture a snapshot of the
+        # original total + the FX rate used so the BillSplit UI can
+        # render an "≈ Rp 500,000" hint underneath the USD figure.
+        # The rest of the pipeline downstream of this block treats
+        # everything as USD — the host's payout account stays USD too.
+        original_currency, original_total_native, fx_rate = (
+            self._convert_payload_to_usd(cleaned)
+        )
+
         validated = validate_parsed_receipt(
             items=[
                 {
@@ -1428,6 +1586,20 @@ class ReceiptParserService:
             bill.total = total
             if cleaned.merchant_name:
                 bill.merchant_name = cleaned.merchant_name
+            # Stamp the original-currency snapshot so the UI can render
+            # an "≈ Rp 500,000" hint. Only set on actual non-USD receipts;
+            # on USD-native bills we leave these columns null.
+            if original_currency and original_currency != "USD":
+                bill.original_currency = original_currency
+                bill.original_total = original_total_native
+                bill.fx_rate_to_usd = fx_rate
+                # `bill.currency` remains "USD" — that's the field the
+                # rest of the system (Stripe, payouts, splits) reads.
+                bill.currency = "USD"
+                warnings.append(
+                    f"Converted from {original_currency} to USD at "
+                    f"rate {fx_rate} (snapshot)."
+                )
 
         now = datetime.now(timezone.utc)
         receipt.parsed = True
