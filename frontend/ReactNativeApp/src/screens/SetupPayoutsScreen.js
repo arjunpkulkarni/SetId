@@ -95,7 +95,7 @@ const LabeledField = React.forwardRef(function LabeledField(
 
 // ─── Screen ─────────────────────────────────────────────────────────────────
 
-export default function SetupPayoutsScreen({ navigation }) {
+export default function SetupPayoutsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { createToken, createPaymentMethod } = useStripe();
@@ -370,15 +370,16 @@ export default function SetupPayoutsScreen({ navigation }) {
 
       await withPayoutSetupRetry(() => stripeConnect.setupPayouts(setupPayload));
 
+      const onDone = () => {
+        const cb = route?.params?.onComplete;
+        if (typeof cb === 'function') cb();
+        navigation.goBack();
+      };
+
       Alert.alert(
         "You're all set",
         "Payout method saved. We'll send funds automatically when your group pays.",
-        [
-          {
-            text: 'Done',
-            onPress: () => navigation.goBack(),
-          },
-        ],
+        [{ text: 'Done', onPress: onDone }],
       );
     } catch (err) {
       const { code, message } = normalizePayoutErr(

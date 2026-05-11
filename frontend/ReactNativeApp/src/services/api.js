@@ -406,7 +406,8 @@ export const stripeConnect = {
    *  connected, charges_enabled, payouts_enabled, details_submitted,
    *  has_instant_external_account, external_account_last4,
    *  external_account_brand, external_account_type, requirements_due,
-   *  requirements_past_due, disabled_reason }.
+   *  requirements_past_due, requirements_pending_verification,
+   *  requirement_error_messages, disabled_reason }.
    *  Safe to call even when the user has never onboarded — returns
    *  `connected: false`. */
   getStatus: () => client.get('/stripe/connect/status'),

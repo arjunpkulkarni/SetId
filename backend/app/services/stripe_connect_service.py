@@ -91,6 +91,12 @@ class ConnectedAccountStatus:
     # like "individual.verification.document" or "external_account".
     requirements_due: list[str]
     requirements_past_due: list[str]
+    # Submitted docs / answers Stripe is still verifying (often after a
+    # business-model questionnaire). Payouts may stay paused until cleared.
+    requirements_pending_verification: list[str]
+    # Stripe `requirements.errors[].reason` (plus context) — e.g. rejected
+    # doc; user must reopen the flow and fix, which feels like “didn’t save”.
+    requirement_error_messages: list[str]
     disabled_reason: Optional[str]
 
 
@@ -513,6 +519,8 @@ class StripeConnectService:
                 external_account_type=None,
                 requirements_due=[],
                 requirements_past_due=[],
+                requirements_pending_verification=[],
+                requirement_error_messages=[],
                 disabled_reason=None,
             )
 
@@ -533,6 +541,22 @@ class StripeConnectService:
         # We surface both so the UI can render the right message.
         currently_due = list(req_obj.get("currently_due") or [])
         past_due = list(req_obj.get("past_due") or [])
+        pending_verification = list(
+            req_obj.get("pending_verification") or []
+        )
+        err_msgs: list[str] = []
+        for err in req_obj.get("errors") or []:
+            if not isinstance(err, dict):
+                continue
+            reason = (err.get("reason") or "").strip()
+            code = (err.get("code") or "").strip()
+            requirement = err.get("requirement")
+            parts = [reason or code]
+            if requirement and requirement not in (reason + code):
+                parts.append(str(requirement))
+            line = ": ".join(p for p in parts if p)
+            if line:
+                err_msgs.append(line)
         disabled_reason = req_obj.get("disabled_reason")
 
         has_instant, last4, brand, acct_type = self._inspect_external_accounts(
@@ -557,6 +581,8 @@ class StripeConnectService:
             external_account_type=acct_type,
             requirements_due=currently_due,
             requirements_past_due=past_due,
+            requirements_pending_verification=pending_verification,
+            requirement_error_messages=err_msgs,
             disabled_reason=disabled_reason,
         )
 

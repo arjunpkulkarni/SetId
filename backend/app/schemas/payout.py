@@ -40,6 +40,8 @@ class ConnectStatusOut(BaseModel):
     external_account_type: str | None = None
     requirements_due: list[str] = Field(default_factory=list)
     requirements_past_due: list[str] = Field(default_factory=list)
+    requirements_pending_verification: list[str] = Field(default_factory=list)
+    requirement_error_messages: list[str] = Field(default_factory=list)
     disabled_reason: str | None = None
 
 
@@ -140,8 +142,8 @@ class ExternalAccountUpdateRequest(BaseModel):
     destination. Expects exactly one of `card_token` or `bank_token`.
     """
 
-    card_token: str | None = Field(default=None, max_length=100)
-    bank_token: str | None = Field(default=None, max_length=100)
+    card_token: str | None = Field(default=None, max_length=220)
+    bank_token: str | None = Field(default=None, max_length=220)
 
     @model_validator(mode="after")
     def _exactly_one_token(self):
@@ -166,8 +168,8 @@ class PayoutsSetupRequest(BaseModel):
     """
 
     individual: PayoutsSetupIndividual
-    card_token: str | None = Field(default=None, max_length=100)
-    bank_token: str | None = Field(default=None, max_length=100)
+    card_token: str | None = Field(default=None, max_length=220)
+    bank_token: str | None = Field(default=None, max_length=220)
     payment_method_id: str | None = Field(
         default=None, min_length=1, max_length=100
     )

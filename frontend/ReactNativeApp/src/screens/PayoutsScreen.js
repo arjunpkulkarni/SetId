@@ -89,6 +89,9 @@ const STATUS_META = {
  * so we never silently hide a requirement.
  */
 function describeRequirement(key) {
+  if (typeof key === 'string' && key.includes('business_model_verification')) {
+    return "Complete Stripe's business model questionnaire (hosted by Stripe).";
+  }
   const map = {
     'external_account': 'Add a payout method.',
     'individual.verification.document': 'Upload a photo of your ID.',
@@ -280,6 +283,16 @@ export default function PayoutsScreen({ navigation }) {
       const blocking = Array.isArray(status.requirements_past_due) && status.requirements_past_due.length > 0
         ? status.requirements_past_due
         : Array.isArray(status.requirements_due) ? status.requirements_due : [];
+      const errs = Array.isArray(status.requirement_error_messages)
+        ? status.requirement_error_messages.filter(Boolean)
+        : [];
+      const pendingVerify = Array.isArray(status.requirements_pending_verification)
+        ? status.requirements_pending_verification.filter(Boolean)
+        : [];
+      const showReviewNote =
+        pendingVerify.length > 0 && blocking.length === 0 && errs.length === 0;
+      const listedSomething =
+        errs.length > 0 || (!showReviewNote && blocking.length > 0);
       return (
         <View style={[styles.statusCard, styles.statusCardPending, shadows.card]}>
           <View style={styles.statusIconWrap}>
@@ -287,10 +300,22 @@ export default function PayoutsScreen({ navigation }) {
           </View>
           <View style={styles.statusTextCol}>
             <Text style={styles.statusTitle}>Verification pending</Text>
-            {blocking.length > 0 ? (
+            {errs.length > 0 ? (
               <>
                 <Text style={styles.statusSubtitle}>
-                  Stripe still needs:
+                  Stripe could not accept your last submission. Fix and resubmit:
+                </Text>
+                {errs.slice(0, 4).map((line, idx) => (
+                  <Text key={`stripe-req-err-${idx}`} style={styles.statusRequirement}>
+                    • {line}
+                  </Text>
+                ))}
+              </>
+            ) : null}
+            {!showReviewNote && blocking.length > 0 ? (
+              <>
+                <Text style={[styles.statusSubtitle, errs.length > 0 && { marginTop: 8 }]}>
+                  {errs.length > 0 ? 'Also still due:' : 'Stripe still needs:'}
                 </Text>
                 {blocking.slice(0, 4).map((req) => (
                   <Text key={req} style={styles.statusRequirement}>
@@ -303,9 +328,17 @@ export default function PayoutsScreen({ navigation }) {
                   </Text>
                 )}
               </>
-            ) : (
+            ) : null}
+            {showReviewNote ? (
               <Text style={styles.statusSubtitle}>
-                Your account needs attention before payouts can run.
+                Stripe is reviewing what you submitted. Payouts stay paused until that
+                finishes—often within one to two business days. Pull down to refresh.
+              </Text>
+            ) : listedSomething ? null : (
+              <Text style={styles.statusSubtitle}>
+                {status.disabled_reason
+                  ? `Stripe: ${status.disabled_reason}`
+                  : 'Your account needs attention before payouts can run.'}
               </Text>
             )}
           </View>
@@ -374,7 +407,7 @@ export default function PayoutsScreen({ navigation }) {
               <Text style={styles.primaryBtnText}>Add payout method</Text>
             </LinearGradient>
           </TouchableOpacity>
-        ) : !status.details_submitted || !status.payouts_enabled ? (
+        ) : !status.details_submitted ? (
           <TouchableOpacity
             activeOpacity={0.85}
             onPress={handleStartOnboarding}
@@ -387,9 +420,27 @@ export default function PayoutsScreen({ navigation }) {
               style={styles.primaryBtnGradient}
             >
               <MaterialIcons name="arrow-forward" size={18} color={colors.onSecondary} />
-              <Text style={styles.primaryBtnText}>
-                {status.details_submitted ? 'Update payout method' : 'Finish setup'}
-              </Text>
+              <Text style={styles.primaryBtnText}>Finish setup</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        ) : !status.payouts_enabled ? (
+          // Already submitted KYC via SetupPayouts; only the payout *destination*
+          // belongs on /external-account. Routing blocked hosts back through
+          // /setup made it look like the new card/bank "didn't save" (Stripe
+          // still shows verification pending AND the UX re-collects identity).
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={handleChangePayoutCard}
+            style={styles.primaryBtn}
+          >
+            <LinearGradient
+              colors={[colors.secondary, colors.secondaryDim]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.primaryBtnGradient}
+            >
+              <MaterialIcons name="arrow-forward" size={18} color={colors.onSecondary} />
+              <Text style={styles.primaryBtnText}>Update payout method</Text>
             </LinearGradient>
           </TouchableOpacity>
         ) : (
