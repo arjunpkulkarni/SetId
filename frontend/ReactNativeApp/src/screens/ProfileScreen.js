@@ -16,6 +16,7 @@ import { colors, radii, shadows } from '../theme';
 import { useAuth } from '../contexts/AuthContext';
 import { users as usersApi, stripeConnect } from '../services/api';
 import LazyImage from '../components/LazyImage';
+import { shouldShowOptimisticPayoutVerificationDone } from '../utils/payoutOptimisticUi';
 
 /** Pretty-print a phone number, falling back to the raw value or an empty
  *  string. Accepts E.164 (e.g. "+14155551234") and returns "+1 (415) 555-1234"
@@ -30,6 +31,48 @@ function formatPhoneForDisplay(raw) {
     return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
   }
   return raw;
+}
+
+/**
+ * One-line hint under Profile → Payouts. Mirrors `PayoutsScreen`'s handling
+ * of Stripe `requirements_*` so users see actionable copy (e.g. “more info
+ * needed”) instead of a vague “verification pending” when Stripe is only
+ * reviewing uploaded documents.
+ */
+function payoutsProfileSubtitle(connectStatus) {
+  const cs = connectStatus;
+  if (!cs) return 'Check status';
+  if (!cs.connected) return 'Not connected — tap to set up';
+  if (!cs.details_submitted) return 'Finish onboarding';
+  if (cs.payouts_enabled) {
+    return cs.external_account_last4
+      ? `Active · ${cs.external_account_brand ?? (cs.external_account_type === 'bank' ? 'Bank' : 'Card')} •• ${cs.external_account_last4}`
+      : 'Payouts active';
+  }
+  if (shouldShowOptimisticPayoutVerificationDone(cs)) {
+    return cs.external_account_last4
+      ? `Submitted · ${cs.external_account_brand ?? (cs.external_account_type === 'bank' ? 'Bank' : 'Card')} •• ${cs.external_account_last4}`
+      : 'Submitted · confirming with Stripe';
+  }
+  const blocking =
+    Array.isArray(cs.requirements_past_due) && cs.requirements_past_due.length > 0
+      ? cs.requirements_past_due
+      : Array.isArray(cs.requirements_due)
+        ? cs.requirements_due
+        : [];
+  const errs = Array.isArray(cs.requirement_error_messages)
+    ? cs.requirement_error_messages.filter(Boolean)
+    : [];
+  const pendingVerify = Array.isArray(cs.requirements_pending_verification)
+    ? cs.requirements_pending_verification.filter(Boolean)
+    : [];
+  const reviewingOnly =
+    pendingVerify.length > 0 && blocking.length === 0 && errs.length === 0;
+  if (errs.length > 0) return 'Submission issue — tap to fix';
+  if (blocking.length > 0) return 'More info needed — tap to finish';
+  if (reviewingOnly) return 'Under Stripe review · typically 1–2 business days';
+  if (cs.disabled_reason) return 'Account on hold — tap for details';
+  return 'Verification pending — tap for status';
 }
 
 export default function ProfileScreen({ navigation }) {
@@ -201,7 +244,8 @@ export default function ProfileScreen({ navigation }) {
                     name="account-balance-wallet"
                     size={22}
                     color={
-                      connectStatus?.payouts_enabled
+                      connectStatus?.payouts_enabled ||
+                      shouldShowOptimisticPayoutVerificationDone(connectStatus)
                         ? colors.secondary
                         : connectStatus?.connected
                           ? colors.tertiary
@@ -211,17 +255,7 @@ export default function ProfileScreen({ navigation }) {
                   <View style={styles.payoutTextCol}>
                     <Text style={styles.rowText}>Payouts</Text>
                     <Text style={styles.payoutSubtitle}>
-                      {!connectStatus
-                        ? 'Check status'
-                        : !connectStatus.connected
-                          ? 'Not connected — tap to set up'
-                          : !connectStatus.details_submitted
-                            ? 'Finish onboarding'
-                            : !connectStatus.payouts_enabled
-                              ? 'Verification pending'
-                              : connectStatus.external_account_last4
-                                ? `Active · ${connectStatus.external_account_brand ?? (connectStatus.external_account_type === 'bank' ? 'Bank' : 'Card')} •• ${connectStatus.external_account_last4}`
-                                : 'Payouts active'}
+                      {payoutsProfileSubtitle(connectStatus)}
                     </Text>
                   </View>
                   <MaterialIcons

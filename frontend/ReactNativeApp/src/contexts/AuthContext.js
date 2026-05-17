@@ -2,8 +2,20 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { authApi, unwrap, ApiError } from '../services/api';
 import { getToken, setToken, removeToken } from '../services/authStorage';
 import { offlineStorage } from '../services/offlineStorage';
+import { store } from '../store/store';
+import { api } from '../store/api';
+import { clearPayoutOptimisticVerificationUi } from '../utils/payoutOptimisticUi';
 
 const AuthContext = createContext(null);
+
+/** Bills/balance caches are not keyed by user id. Clear them whenever the
+ * session identity changes so a new signup/login never flashes another
+ * user's dashboard from AsyncStorage or RTK Query's keepUnusedData cache. */
+async function wipeSessionCaches() {
+  await offlineStorage.clear();
+  clearPayoutOptimisticVerificationUi();
+  store.dispatch(api.util.resetApiState());
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -63,6 +75,7 @@ export function AuthProvider({ children }) {
     const token = data.access_token;
     if (!token) throw new Error('No token returned');
     await setToken(token);
+    await wipeSessionCaches();
     setTokenState(token);
     if (data.user) {
       setUser(data.user);
@@ -88,6 +101,7 @@ export function AuthProvider({ children }) {
     const accessToken = data.access_token ?? data.token;
     if (!accessToken) throw new Error('No token returned');
     await setToken(accessToken);
+    await wipeSessionCaches();
     setTokenState(accessToken);
     if (data.user) {
       setUser(data.user);
@@ -123,9 +137,7 @@ export function AuthProvider({ children }) {
       // ignore — clear local state regardless
     }
     await removeToken();
-    // Wipe cached API responses so the next user on this device can't see
-    // the previous user's bills, balances, etc.
-    await offlineStorage.clear();
+    await wipeSessionCaches();
     setTokenState(null);
     setUser(null);
     setNeedsOnboarding(false);

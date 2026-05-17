@@ -24,6 +24,7 @@ import {
   normalizePayoutErr,
   withPayoutSetupRetry,
 } from '../utils/payoutErrors';
+import { markPayoutVerificationSubmittedOptimistically } from '../utils/payoutOptimisticUi';
 
 function digitsOnly(v) {
   return String(v ?? '').replace(/\D/g, '');
@@ -159,6 +160,8 @@ export default function UpdatePayoutCardScreen({ navigation, route }) {
           stripeConnect.updatePayoutMethod({ bank_token: token.id }),
         );
       }
+
+      markPayoutVerificationSubmittedOptimistically();
 
       Alert.alert(
         'Payout method updated',

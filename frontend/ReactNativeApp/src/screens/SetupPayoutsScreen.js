@@ -25,6 +25,7 @@ import {
   normalizePayoutErr,
   withPayoutSetupRetry,
 } from '../utils/payoutErrors';
+import { markPayoutVerificationSubmittedOptimistically } from '../utils/payoutOptimisticUi';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -369,6 +370,8 @@ export default function SetupPayoutsScreen({ navigation, route }) {
       };
 
       await withPayoutSetupRetry(() => stripeConnect.setupPayouts(setupPayload));
+
+      markPayoutVerificationSubmittedOptimistically();
 
       const onDone = () => {
         const cb = route?.params?.onComplete;

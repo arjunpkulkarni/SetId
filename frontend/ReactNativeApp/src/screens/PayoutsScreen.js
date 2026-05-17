@@ -14,6 +14,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, radii, shadows } from '../theme';
 import { stripeConnect } from '../services/api';
+import {
+  clearPayoutOptimisticVerificationUi,
+  shouldShowOptimisticPayoutVerificationDone,
+} from '../utils/payoutOptimisticUi';
 
 function formatUsd(cents) {
   const num = (Number(cents) || 0) / 100;
@@ -154,6 +158,9 @@ export default function PayoutsScreen({ navigation }) {
       if (!mountedRef.current) return;
       const s = statusRes?.data ?? null;
       setStatus(s);
+      if (s?.payouts_enabled) {
+        clearPayoutOptimisticVerificationUi();
+      }
 
       if (s?.connected && s?.payouts_enabled) {
         const [balanceRes, payoutsRes, txnsRes] = await Promise.all([
@@ -277,6 +284,35 @@ export default function PayoutsScreen({ navigation }) {
     }
 
     if (!status.payouts_enabled) {
+      if (shouldShowOptimisticPayoutVerificationDone(status)) {
+        const cardDescOpt =
+          status.external_account_last4
+            ? `${status.external_account_brand ?? (status.external_account_type === 'bank' ? 'Bank' : 'Card')} •• ${status.external_account_last4}`
+            : 'Payout method on file';
+        return (
+          <View style={[styles.statusCard, styles.statusCardActive, shadows.card]}>
+            <View style={styles.statusIconWrap}>
+              <MaterialIcons name="verified" size={22} color={colors.secondary} />
+            </View>
+            <View style={styles.statusTextCol}>
+              <Text style={styles.statusTitle}>{"You're all set"}</Text>
+              <Text style={styles.statusSubtitle}>
+                {"We're confirming your details with Stripe — usually within a minute. Pull down to refresh for the latest status."}
+              </Text>
+              <Text style={[styles.statusSubtitle, { marginTop: 10 }]}>{cardDescOpt}</Text>
+            </View>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={handleChangePayoutCard}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.statusAction}
+            >
+              <Text style={styles.statusActionText}>Change</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
       // Prefer `past_due` (account is blocked) over `currently_due` (soon-
       // due) when building the human-readable list. Fall back to the
       // generic disabled_reason only if we have neither.
@@ -423,7 +459,8 @@ export default function PayoutsScreen({ navigation }) {
               <Text style={styles.primaryBtnText}>Finish setup</Text>
             </LinearGradient>
           </TouchableOpacity>
-        ) : !status.payouts_enabled ? (
+        ) : !status.payouts_enabled &&
+          !shouldShowOptimisticPayoutVerificationDone(status) ? (
           // Already submitted KYC via SetupPayouts; only the payout *destination*
           // belongs on /external-account. Routing blocked hosts back through
           // /setup made it look like the new card/bank "didn't save" (Stripe
