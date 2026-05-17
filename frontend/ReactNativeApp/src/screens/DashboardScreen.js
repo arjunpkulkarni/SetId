@@ -4,16 +4,21 @@ import {
   View,
   Text,
   ScrollView,
-  Image,
   TouchableOpacity,
   StyleSheet,
-  Platform,
   ActivityIndicator,
   RefreshControl,
   Alert,
   Animated,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import Svg, {
+  Circle,
+  Defs,
+  LinearGradient as SvgLinearGradient,
+  Path,
+  Stop,
+} from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -35,18 +40,17 @@ import { offlineStorage } from '../services/offlineStorage';
 import LazyImage from '../components/LazyImage';
 
 /** Dashboard marketing / mockup palette */
-const DASHBOARD_GREEN = '#004D40';
-const DASHBOARD_GREEN_MID = '#00695C';
+const DASHBOARD_GREEN = '#105D4B';
+const DASHBOARD_GREEN_MID = '#1FA87A';
+const DESIGN_BG = '#F7F9F8';
+const DESIGN_SURFACE_BORDER = '#ECF0EE';
+const DESIGN_TEXT = '#0F1F1A';
+const DESIGN_MUTED = '#6B7280';
+const DESIGN_MINT = '#4FD1A7';
+const DESIGN_CARD_GRADIENT = ['#0E5443', '#105D4B', '#0A7C63'];
 const RECEIPT_ICON_FEATURED_BG = '#FCE4EC';
 const RECEIPT_ICON_FEATURED_FG = '#880E4F';
 const MINT_ICON_BG = '#E0F2F1';
-
-/** FAB pinned to bottom-right of the *tab screen* (area above the tab bar).
- *  Do not add `tabBarHeight` here — React Navigation already lays out the
- *  screen above the bar; large `bottom` values float the button into the list. */
-const FAB_BOTTOM = 24;
-const FAB_RIGHT = 20;
-
 
 /** Keeps header compact so action icons stay on-screen (E.164 is very long). */
 function compactDisplayName(raw) {
@@ -62,8 +66,6 @@ function compactDisplayName(raw) {
   }
   return raw;
 }
-
-const DRAFT_BILL_TITLE = 'Settld Bill';
 
 const ACTIVITY_TYPE_META = {
   bill_created: { icon: 'receipt-long', positive: true },
@@ -162,8 +164,127 @@ function firstNameFromUser(user) {
   return first.length > 16 ? `${first.slice(0, 14)}…` : first;
 }
 
+function splitCurrencyParts(value) {
+  const num = typeof value === 'string' ? parseFloat(value) : value;
+  const v = Number.isFinite(num) ? Number(num) : 0;
+  const abs = Math.abs(v);
+  const [ints, dec] = abs.toFixed(2).split('.');
+  const formattedInts = Number(ints).toLocaleString('en-US');
+  return { sign: v < 0 ? '-' : '', ints: formattedInts, dec };
+}
+
+/** Trend graphic for the hero balance card (matches marketing mock). */
+function SparkHeroChart({ trendUp }) {
+  const W = 92;
+  const H = 32;
+  const pts = trendUp
+    ? [
+        [0, H],
+        [8.36, H - 5.33],
+        [16.73, H - 2.67],
+        [25.09, H - 10.67],
+        [33.45, H - 8],
+        [41.82, H - 16],
+        [50.18, H - 13.33],
+        [58.55, H - 21.33],
+        [66.91, H - 18.67],
+        [75.27, H - 26.67],
+        [83.64, H - 24],
+        [92, 0],
+      ]
+    : [
+        [0, 4],
+        [10, 12],
+        [20, 8],
+        [30, 18],
+        [40, 14],
+        [50, 22],
+        [60, 16],
+        [70, 26],
+        [80, 20],
+        [92, H - 4],
+      ];
+  const lineD = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x},${y}`).join(' ');
+  const areaD = `${lineD} L${W},${H} L0,${H} Z`;
+  const lx = pts[pts.length - 1][0];
+  const ly = pts[pts.length - 1][1];
+  const gid = trendUp ? 'heroSparkUp' : 'heroSparkDn';
+  return (
+    <Svg width={W} height={H}>
+      <Defs>
+        <SvgLinearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0%" stopColor={DESIGN_MINT} stopOpacity={0.28} />
+          <Stop offset="100%" stopColor={DESIGN_MINT} stopOpacity={0} />
+        </SvgLinearGradient>
+      </Defs>
+      <Path d={areaD} fill={`url(#${gid})`} />
+      <Path
+        d={lineD}
+        fill="none"
+        stroke={DESIGN_MINT}
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Circle cx={lx} cy={ly} r={3} fill={DESIGN_MINT} />
+      <Circle cx={lx} cy={ly} r={6} fill={DESIGN_MINT} opacity={0.25} />
+    </Svg>
+  );
+}
+
+/** Compact spark for person rows (`uid` avoids Svg gradient id collisions). */
+function SparkRowChart({ positive, uid = 'spark' }) {
+  const W = 48;
+  const H = 20;
+  const pts = positive
+    ? [
+        [0, H],
+        [8, H - 6.67],
+        [16, H - 3.33],
+        [24, H - 10],
+        [32, H - 16.67],
+        [40, H - 13.33],
+        [48, 0],
+      ]
+    : [
+        [0, 2],
+        [8, 6],
+        [16, 12],
+        [24, 8],
+        [32, 16],
+        [40, H],
+        [48, H - 5],
+      ];
+  const stroke = positive ? DESIGN_MINT : '#E25C5C';
+  const lineD = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x},${y}`).join(' ');
+  const areaD = `${lineD} L${W},${H} L0,${H} Z`;
+  const lx = pts[pts.length - 1][0];
+  const ly = pts[pts.length - 1][1];
+  const gid = `${uid}-${positive ? 'rowSparkUp' : 'rowSparkDn'}`;
+  return (
+    <Svg width={W} height={H}>
+      <Defs>
+        <SvgLinearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0%" stopColor={stroke} stopOpacity={0.28} />
+          <Stop offset="100%" stopColor={stroke} stopOpacity={0} />
+        </SvgLinearGradient>
+      </Defs>
+      <Path d={areaD} fill={`url(#${gid})`} />
+      <Path
+        d={lineD}
+        fill="none"
+        stroke={stroke}
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Circle cx={lx} cy={ly} r={3} fill={stroke} />
+      <Circle cx={lx} cy={ly} r={6} fill={stroke} opacity={0.25} />
+    </Svg>
+  );
+}
+
 function TopAppBar({ insets, user, navigation }) {
-  const { logout } = useAuth();
   const firstName = firstNameFromUser(user);
 
   const initials = (user?.full_name || user?.phone || '?')
@@ -175,94 +296,371 @@ function TopAppBar({ insets, user, navigation }) {
     .slice(0, 2)
     .toUpperCase() || '?';
 
-  const confirmLogout = () => {
-    Alert.alert('Log out', 'Sign out of Settld on this device?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Log out', style: 'destructive', onPress: () => logout() },
-    ]);
+  const openProfile = () => navigation.navigate('ProfileTab');
+  const openNotifications = () => {
+    const parent = navigation.getParent?.();
+    if (parent?.navigate) parent.navigate('Notifications');
   };
 
   return (
-    <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-      <View style={styles.topBarInner}>
-        <View style={styles.greetingBlock}>
-          <Text style={styles.greetingName} numberOfLines={1}>
-            {firstName}
-          </Text>
-          <Text style={styles.greetingRest}>Welcome back! 👋</Text>
+    <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
+      <View style={styles.topBarRow}>
+        <View style={styles.headerIdentity}>
+          <TouchableOpacity
+            accessibilityLabel="Profile"
+            onPress={openProfile}
+            activeOpacity={0.85}
+            style={styles.headerAvatarGradientWrap}
+          >
+            <LinearGradient
+              colors={[DESIGN_MINT, DASHBOARD_GREEN]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.headerAvatarGradient}
+            >
+              {user?.avatar_url ? (
+                <LazyImage
+                  source={{ uri: user.avatar_url }}
+                  style={styles.headerAvatarImgSmall}
+                  fallbackIcon="person"
+                  fallbackIconSize={20}
+                />
+              ) : (
+                <Text style={styles.headerAvatarGradientInitials}>{initials}</Text>
+              )}
+            </LinearGradient>
+          </TouchableOpacity>
+          <View style={styles.headerGreetingCol}>
+            <Text style={styles.welcomeBackSmall}>Welcome back</Text>
+            <Text style={styles.headerDisplayName} numberOfLines={1}>
+              {firstName}
+            </Text>
+          </View>
         </View>
-        <TouchableOpacity
-          accessibilityLabel="Account"
-          accessibilityHint="Opens profile. Long press to log out."
-          onPress={() => navigation.navigate('ProfileTab')}
-          onLongPress={confirmLogout}
-          activeOpacity={0.85}
-          style={styles.headerAvatarBtn}
-        >
-          {user?.avatar_url ? (
-            <LazyImage
-              source={{ uri: user.avatar_url }}
-              style={styles.headerAvatarImg}
-              fallbackIcon="person"
-            />
-          ) : (
-            <View style={styles.headerAvatarCircle}>
-              <Text style={styles.headerAvatarInitials}>{initials}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            activeOpacity={0.85}
+            onPress={openNotifications}
+            accessibilityLabel="Notifications"
+          >
+            <MaterialIcons name="notifications-none" size={22} color={DESIGN_TEXT} />
+            <View style={styles.notifDot} />
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
 }
 
-function BalanceHero({ overview, isLoading }) {
+function NetBalanceCard({
+  overview,
+  isLoading,
+  billsThisWeek,
+}) {
+  const [hidden, setHidden] = useState(false);
+  /** MVP: surface only money owed *to* the user (host / collecting). */
   const owedToYou = parseFloat(overview?.total_owed_to_you ?? 0);
-  const youOwe = parseFloat(overview?.total_you_owe ?? 0);
-  const net = owedToYou - youOwe;
-  const badgeText =
-    net >= 0 ? `+${formatCurrency(net)} owed to you` : `${formatCurrency(Math.abs(net))} you owe`;
+  const parts = splitCurrencyParts(owedToYou);
+  const trendUp = owedToYou >= 0;
+
+  const weeklyLabel =
+    billsThisWeek > 0
+      ? `${billsThisWeek} bill${billsThisWeek === 1 ? '' : 's'} updated this week`
+      : null;
 
   return (
-    <View style={styles.balanceHeroWrap}>
+    <View style={styles.netCardOuter}>
       <LinearGradient
-        colors={[DASHBOARD_GREEN, DASHBOARD_GREEN_MID]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={[styles.balanceGradientCard, shadows.card]}
+        colors={DESIGN_CARD_GRADIENT}
+        start={{ x: 0.2, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={[styles.netCardGradient, shadows.card]}
       >
-        <View style={styles.balanceCardRow}>
-          <View style={styles.balanceCardMain}>
-            <Text style={styles.balanceLabelOnDark}>Current Balance</Text>
-            {isLoading ? (
-              <View style={styles.balanceLoaderDark}>
-                <ActivityIndicator size="large" color="rgba(255,255,255,0.85)" />
-              </View>
-            ) : (
-              <>
-                <Text style={styles.balanceAmountOnDark}>
-                  {net < 0 ? '-' : ''}
-                  {formatCurrency(net)}
-                </Text>
-                <View style={[styles.balanceTrendBadge, net < 0 && styles.balanceTrendBadgeNeg]}>
-                  <Text
-                    style={[styles.balanceTrendBadgeText, net < 0 && styles.balanceTrendBadgeTextNeg]}
-                    numberOfLines={1}
-                  >
-                    {net >= 0 ? '↗ ' : '↘ '}
-                    {badgeText}
-                  </Text>
-                </View>
-              </>
-            )}
+        <View style={styles.netOrbTop} />
+        <View style={styles.netOrbBottom} />
+
+        <View style={styles.netCardInner}>
+          <View style={styles.netCardTitleRow}>
+            <Text style={styles.netBalanceLabel}>You&apos;re owed</Text>
+            <TouchableOpacity
+              style={styles.netEyeBtn}
+              onPress={() => setHidden((h) => !h)}
+              accessibilityLabel={hidden ? 'Show amount' : 'Hide amount'}
+            >
+              <MaterialIcons
+                name={hidden ? 'visibility' : 'visibility-off'}
+                size={16}
+                color="#FFFFFF"
+              />
+            </TouchableOpacity>
           </View>
-          {!isLoading ? (
-            <View style={styles.balanceDollarRing}>
-              <MaterialIcons name="attach-money" size={28} color="rgba(255,255,255,0.92)" />
+
+          <View style={styles.netAmountRow}>
+            <View style={styles.netAmountLeft}>
+              {isLoading ? (
+                <ActivityIndicator color="#FFFFFF" style={{ marginTop: 8 }} />
+              ) : hidden ? (
+                <Text style={styles.netAmountHidden}>••••••</Text>
+              ) : (
+                <View style={styles.netAmountSplit}>
+                  <Text style={styles.netDollarSym}>{parts.sign}$</Text>
+                  <Text style={styles.netDollars}>{parts.ints}</Text>
+                  <Text style={styles.netCents}>.{parts.dec}</Text>
+                </View>
+              )}
+            </View>
+            {!isLoading && !hidden ? (
+              <View style={styles.sparkHeroWrap}>
+                <SparkHeroChart trendUp={trendUp} />
+              </View>
+            ) : null}
+          </View>
+
+          {!isLoading && !hidden && weeklyLabel ? (
+            <View style={styles.netWeeklyPill}>
+              <MaterialIcons name="trending-up" size={12} color={DESIGN_MINT} />
+              <Text style={styles.netWeeklyPillText}>{weeklyLabel}</Text>
             </View>
           ) : null}
         </View>
       </LinearGradient>
+    </View>
+  );
+}
+
+const PEOPLE_AVATAR_COLORS = ['#1FA87A', '#E8A443', '#5B8DEF', '#D762A4', '#6B7280'];
+
+function buildPeoplePreviewRows(activeBills, completedActiveBills) {
+  const rows = [];
+  const paletteIdx = { current: 0 };
+  const nextColor = () => {
+    const c = PEOPLE_AVATAR_COLORS[paletteIdx.current % PEOPLE_AVATAR_COLORS.length];
+    paletteIdx.current += 1;
+    return c;
+  };
+
+  const pushBill = (bill) => {
+    // MVP: only list splits where you're collecting (owed to you).
+    if (!bill.is_host) return;
+
+    const title = bill.merchant_name || bill.title || 'Bill';
+    const letter = `${title}`.trim().charAt(0).toUpperCase() || '?';
+    const billRem = parseFloat(bill.bill_remaining ?? 0);
+    const paidAgg = parseFloat(bill.bill_paid ?? 0);
+
+    let amountLabel = '';
+    let positive = true;
+    let subtitle = `${bill.member_count} ${bill.member_count === 1 ? 'person' : 'people'}`;
+    if (billRem > 0.005) {
+      amountLabel = `+${formatCurrency(billRem)}`;
+      subtitle = `Collecting · ${subtitle}`;
+    } else if (paidAgg > 0 && billRem <= 0.005) {
+      amountLabel = formatCurrency(paidAgg);
+      subtitle = `Paid · ${subtitle}`;
+    } else {
+      amountLabel = formatCurrency(0);
+      subtitle = `${bill.status} · ${subtitle}`;
+    }
+    rows.push({
+      key: `host-${bill.id}`,
+      initials: letter,
+      avatarColor: nextColor(),
+      title,
+      subtitle,
+      amountLabel,
+      positive,
+    });
+  };
+
+  for (const b of activeBills ?? []) pushBill(b);
+  for (const b of completedActiveBills ?? []) pushBill(b);
+
+  return rows.slice(0, 12);
+}
+
+function PersonPreviewCard({ row }) {
+  const amtColor = row.positive ? DASHBOARD_GREEN_MID : '#E25C5C';
+  return (
+    <View style={[styles.personCard, shadows.card]}>
+      <View style={[styles.personAvatar, { backgroundColor: row.avatarColor }]}>
+        <Text style={styles.personAvatarLetter}>{row.initials}</Text>
+      </View>
+      <View style={styles.personCardMid}>
+        <Text style={styles.personCardTitle} numberOfLines={1}>
+          {row.title}
+        </Text>
+        <Text style={styles.personCardSub} numberOfLines={1}>
+          {row.subtitle}
+        </Text>
+      </View>
+      <View style={styles.personCardRight}>
+        <SparkRowChart positive={row.positive} uid={String(row.key)} />
+        <Text style={[styles.personCardAmt, { color: amtColor }]}>{row.amountLabel}</Text>
+      </View>
+    </View>
+  );
+}
+
+function ActivityPreviewCard({ item, onPress, sparkUid = 'activity' }) {
+  const meta = ACTIVITY_TYPE_META[item.type] || { icon: 'info', positive: true };
+  const hasAmount = item.amount != null && Number.isFinite(item.amount);
+  const neutralAmount = !!meta.neutralAmount;
+  const subtitle =
+    item.type === 'past_bill' && item.member_count != null
+      ? `${formatRelativeTime(item.timestamp)} · ${item.member_count} ${
+          item.member_count === 1 ? 'person' : 'people'
+        }`
+      : formatRelativeTime(item.timestamp);
+  const chipLetter = (item.bill_title || '?').trim().charAt(0).toUpperCase();
+
+  let amtText = '';
+  let amtPositive = meta.positive;
+  if (hasAmount) {
+    amtText = neutralAmount
+      ? formatCurrency(item.amount)
+      : `${meta.positive ? '+' : '−'}${formatCurrency(item.amount)}`;
+  }
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.88}
+      onPress={() => onPress(item)}
+      style={[styles.personCard, shadows.card]}
+    >
+      <View style={[styles.personAvatar, { backgroundColor: PEOPLE_AVATAR_COLORS[2] }]}>
+        <Text style={styles.personAvatarLetter}>{chipLetter}</Text>
+      </View>
+      <View style={styles.personCardMid}>
+        <Text style={styles.personCardTitle} numberOfLines={1}>
+          {item.bill_title || item.description || 'Activity'}
+        </Text>
+        <Text style={styles.personCardSub} numberOfLines={1}>
+          {subtitle}
+        </Text>
+      </View>
+      <View style={styles.personCardRight}>
+        {hasAmount ? (
+          <>
+            <SparkRowChart positive={amtPositive} uid={sparkUid} />
+            <Text
+              style={[
+                styles.personCardAmt,
+                neutralAmount && { color: DESIGN_MUTED },
+                !neutralAmount && { color: amtPositive ? DASHBOARD_GREEN_MID : '#E25C5C' },
+              ]}
+            >
+              {amtText}
+            </Text>
+          </>
+        ) : (
+          <MaterialIcons name={meta.icon} size={22} color={DESIGN_MUTED} />
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function YourPeopleSection({
+  tab,
+  onTabChange,
+  peopleRows,
+  recentActivity,
+  navigation,
+  activeBills,
+  completedActiveBills,
+  onSettle,
+  onDelete,
+  onOpenBill,
+  billsLoading,
+}) {
+  const openNotifications = () => {
+    const parent = navigation.getParent?.();
+    if (parent?.navigate) parent.navigate('Notifications');
+  };
+
+  const tabs = [
+    { key: 'friends', label: 'Friends' },
+    { key: 'bills', label: 'Bills' },
+    { key: 'activity', label: 'Activity' },
+  ];
+
+  return (
+    <View style={styles.yourPeopleSection}>
+      <View style={styles.yourPeopleHeader}>
+        <Text style={styles.yourPeopleTitle}>Your people</Text>
+      </View>
+
+      <View style={styles.segmentWrap}>
+        {tabs.map((t) => {
+          const active = tab === t.key;
+          return (
+            <TouchableOpacity
+              key={t.key}
+              style={[styles.segmentBtn, active && styles.segmentBtnActive]}
+              onPress={() => onTabChange(t.key)}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.segmentBtnText, active && styles.segmentBtnTextActive]}>{t.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {tab === 'friends' ? (
+        <View style={styles.yourPeopleList}>
+          {peopleRows.length === 0 ? (
+            <View style={[styles.personEmptyCard, shadows.card]}>
+              <MaterialIcons name="groups" size={36} color={DESIGN_MUTED} />
+              <Text style={styles.personEmptyTitle}>No active splits yet</Text>
+              <Text style={styles.personEmptySub}>Scan a receipt and invite friends — they&apos;ll show up here.</Text>
+            </View>
+          ) : (
+            peopleRows.map((row) => <PersonPreviewCard key={row.key} row={row} />)
+          )}
+        </View>
+      ) : null}
+
+      {tab === 'bills' ? (
+        <View style={styles.yourPeopleListFlat}>
+          <ActiveBillsSection
+            bills={activeBills}
+            onSettle={onSettle}
+            onDelete={onDelete}
+            onOpenBill={onOpenBill}
+            onViewAll={openNotifications}
+            isLoading={billsLoading}
+          />
+          <BillCompleteSection bills={completedActiveBills} onOpenBill={onOpenBill} onDelete={onDelete} />
+        </View>
+      ) : null}
+
+      {tab === 'activity' ? (
+        <View style={styles.yourPeopleList}>
+          {!recentActivity?.length ? (
+            <View style={[styles.personEmptyCard, shadows.card]}>
+              <MaterialIcons name="history" size={36} color={DESIGN_MUTED} />
+              <Text style={styles.personEmptyTitle}>No activity yet</Text>
+              <Text style={styles.personEmptySub}>Closed bills and updates will appear here.</Text>
+            </View>
+          ) : (
+            recentActivity.map((item, idx) => (
+              <ActivityPreviewCard
+                key={
+                  item.bill_id
+                    ? `act-${item.bill_id}-${idx}`
+                    : `${item.type}-${String(item.timestamp)}-${idx}`
+                }
+                sparkUid={`activity-${idx}`}
+                item={item}
+                onPress={(it) => {
+                  if (it.bill_id) navigation.navigate('BillSplit', { billId: it.bill_id });
+                }}
+              />
+            ))
+          )}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -556,118 +954,6 @@ function ActiveBillsSection({ bills, onSettle, onDelete, onOpenBill, onViewAll, 
   );
 }
 
-function ActivityItem({ item, isLast, onPress }) {
-  const meta = ACTIVITY_TYPE_META[item.type] || { icon: 'info', positive: true };
-  const hasAmount = item.amount != null && Number.isFinite(item.amount);
-  const positive = meta.positive;
-  const neutralAmount = !!meta.neutralAmount;
-
-  const statusLabel =
-    item.type === 'past_bill'
-      ? (item.status_label || 'Past bill')
-      : item.type.replace(/_/g, ' ');
-
-  const subtitle =
-    item.type === 'past_bill' && item.member_count != null
-      ? `${formatRelativeTime(item.timestamp)} · ${item.member_count} ${
-          item.member_count === 1 ? 'person' : 'people'
-        }`
-      : formatRelativeTime(item.timestamp);
-
-  return (
-    <TouchableOpacity
-      activeOpacity={0.7}
-      onPress={onPress}
-      style={[styles.activityItem, !isLast && styles.activityItemBorder]}
-    >
-      <View style={styles.activityIconWrap}>
-        <MaterialIcons name={meta.icon} size={20} color={colors.onSurfaceVariant} />
-      </View>
-      <View style={styles.activityInfo}>
-        <Text style={styles.activityTitle} numberOfLines={1}>
-          {item.bill_title || item.description}
-        </Text>
-        <Text style={styles.activityDate}>{subtitle}</Text>
-      </View>
-      <View style={styles.activityRight}>
-        {hasAmount && (
-          <Text
-            style={[
-              styles.activityAmount,
-              neutralAmount && styles.activityAmountNeutral,
-              !neutralAmount && { color: positive ? colors.secondary : colors.error },
-            ]}
-          >
-            {neutralAmount
-              ? formatCurrency(item.amount)
-              : `${positive ? '+' : '-'}${formatCurrency(item.amount)}`}
-          </Text>
-        )}
-        <Text style={styles.activityStatus}>{statusLabel}</Text>
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-function RecentActivitySection({ activities, onItemPress }) {
-  if (!activities || activities.length === 0) {
-    return (
-      <View style={[styles.section, styles.sectionRecentActivity]}>
-        <Text style={styles.sectionTitle}>Recent activity</Text>
-        <View style={[styles.emptyCard, shadows.card]}>
-          <MaterialIcons name="history" size={40} color={colors.outlineVariant} />
-          <Text style={styles.emptyText}>No past bills yet</Text>
-          <Text style={styles.emptySubtext}>Settled and closed bills show up here</Text>
-        </View>
-      </View>
-    );
-  }
-
-  return (
-    <View style={[styles.section, styles.sectionRecentActivity]}>
-      <Text style={styles.sectionTitle}>Recent activity</Text>
-      <View style={[styles.activityCard, shadows.card]}>
-        {activities.map((item, i) => (
-          <ActivityItem
-            key={
-              item.bill_id
-                ? `past-bill-${item.bill_id}`
-                : `${item.type}-${String(item.timestamp)}-${i}`
-            }
-            item={item}
-            isLast={i === activities.length - 1}
-            onPress={() => onItemPress(item)}
-          />
-        ))}
-      </View>
-    </View>
-  );
-}
-
-function FloatingActionButton({ onPress, loading }) {
-  return (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      onPress={onPress}
-      disabled={loading}
-      style={[styles.fab, shadows.fab]}
-    >
-      <LinearGradient
-        colors={[DASHBOARD_GREEN, DASHBOARD_GREEN_MID]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={[styles.fabGradient, loading && styles.fabGradientDisabled]}
-      >
-        {loading ? (
-          <ActivityIndicator color="#FFFFFF" />
-        ) : (
-          <MaterialIcons name="add" size={28} color="#FFFFFF" />
-        )}
-      </LinearGradient>
-    </TouchableOpacity>
-  );
-}
-
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
 // Throttle window for the focus-triggered draft cleanup. The backend call
@@ -754,8 +1040,23 @@ export default function DashboardScreen({ navigation }) {
     [pastBills],
   );
 
+  const billsThisWeek = useMemo(() => {
+    const weekMs = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const merged = [...rawActiveBills, ...pastBills];
+    return merged.filter((b) => {
+      const t = new Date(b.updated_at || b.created_at).getTime();
+      return Number.isFinite(t) && now - t < weekMs;
+    }).length;
+  }, [rawActiveBills, pastBills]);
+
+  const peopleRows = useMemo(
+    () => buildPeoplePreviewRows(activeBills, completedActiveBills),
+    [activeBills, completedActiveBills],
+  );
+
   const [refreshing, setRefreshing] = useState(false);
-  const [creatingBill, setCreatingBill] = useState(false);
+  const [peopleTab, setPeopleTab] = useState('friends');
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -807,13 +1108,6 @@ export default function DashboardScreen({ navigation }) {
     [navigation],
   );
 
-  const handleViewAllBills = useCallback(() => {
-    const parent = navigation.getParent?.();
-    if (parent?.navigate) {
-      parent.navigate('Notifications');
-    }
-  }, [navigation]);
-
   const handleDeleteBill = useCallback(
     async (bill) => {
       if (!bill?.id) return;
@@ -852,26 +1146,6 @@ export default function DashboardScreen({ navigation }) {
     [dispatch, store, refetchDashboard],
   );
 
-  const handleCreateBillFromReceipt = useCallback(async () => {
-    if (creatingBill) return;
-
-    setCreatingBill(true);
-    try {
-      const res = await bills.create({ title: DRAFT_BILL_TITLE });
-      const billId = res?.data?.id;
-
-      if (!billId) {
-        throw new Error('Missing bill ID');
-      }
-
-      navigation.navigate('ScanReceipt', { billId });
-    } catch (err) {
-      Alert.alert('Could not start bill', err?.error?.message ?? 'Please try again.');
-    } finally {
-      setCreatingBill(false);
-    }
-  }, [creatingBill, navigation]);
-
   return (
     <View style={styles.root}>
       <TopAppBar insets={insets} user={user} navigation={navigation} />
@@ -880,12 +1154,9 @@ export default function DashboardScreen({ navigation }) {
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: insets.top + 72, paddingBottom: tabBarHeight + 120 },
+          { paddingTop: insets.top + 58, paddingBottom: tabBarHeight + 56 },
         ]}
         showsVerticalScrollIndicator={false}
-        // When the dashboard fits on a single screen there's nothing to scroll to,
-        // so disable iOS rubber-band and Android overscroll. RefreshControl still
-        // works because pull-to-refresh doesn't need overscroll to trigger.
         alwaysBounceVertical={false}
         overScrollMode="never"
         refreshControl={
@@ -896,32 +1167,25 @@ export default function DashboardScreen({ navigation }) {
           />
         }
       >
-        <BalanceHero overview={overview} isLoading={balanceLoading} />
-        <ActiveBillsSection
-          bills={activeBills}
+        <NetBalanceCard
+          overview={overview}
+          isLoading={balanceLoading}
+          billsThisWeek={billsThisWeek}
+        />
+        <YourPeopleSection
+          tab={peopleTab}
+          onTabChange={setPeopleTab}
+          peopleRows={peopleRows}
+          recentActivity={recentActivity}
+          navigation={navigation}
+          activeBills={activeBills}
+          completedActiveBills={completedActiveBills}
           onSettle={handleSettle}
           onDelete={handleDeleteBill}
           onOpenBill={handleOpenBill}
-          onViewAll={handleViewAllBills}
-          isLoading={billsLoadingInline}
-        />
-        <BillCompleteSection
-          bills={completedActiveBills}
-          onOpenBill={handleOpenBill}
-          onDelete={handleDeleteBill}
-        />
-        <RecentActivitySection
-          activities={recentActivity}
-          onItemPress={(item) => {
-            if (item.bill_id) navigation.navigate('BillSplit', { billId: item.bill_id });
-          }}
+          billsLoading={billsLoadingInline}
         />
       </ScrollView>
-
-      <FloatingActionButton
-        loading={creatingBill}
-        onPress={handleCreateBillFromReceipt}
-      />
     </View>
   );
 }
@@ -931,7 +1195,7 @@ export default function DashboardScreen({ navigation }) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: DESIGN_BG,
   },
   centered: {
     alignItems: 'center',
@@ -944,136 +1208,361 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 50,
-    backgroundColor: 'rgba(248, 249, 250, 0.88)',
-    ...Platform.select({
-      ios: {},
-      android: { backgroundColor: 'rgba(248, 249, 250, 0.95)' },
-    }),
+    backgroundColor: DESIGN_BG,
   },
-  topBarInner: {
+  topBarRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 24,
-    paddingBottom: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 10,
   },
-  greetingBlock: {
+  headerIdentity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
     flex: 1,
-    paddingRight: 12,
+    minWidth: 0,
   },
-  greetingName: {
-    fontFamily: 'Manrope_700Bold',
-    fontSize: 22,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-    color: colors.onSurface,
+  headerAvatarGradientWrap: {
+    shadowColor: '#105D4B',
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
-  greetingRest: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 15,
-    lineHeight: 22,
-    color: colors.onSurfaceVariant,
-    marginTop: 4,
-  },
-  headerAvatarBtn: {
-    flexShrink: 0,
-  },
-  headerAvatarCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#00897B',
+  headerAvatarGradient: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  headerAvatarInitials: {
-    fontFamily: 'Manrope_700Bold',
-    fontSize: 18,
-    fontWeight: '700',
+  headerAvatarGradientInitials: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 15,
+    fontWeight: '800',
     color: '#FFFFFF',
+    letterSpacing: 0.3,
   },
-  headerAvatarImg: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  headerAvatarImgSmall: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+  },
+  headerGreetingCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  welcomeBackSmall: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    fontWeight: '500',
+    color: DESIGN_MUTED,
+  },
+  headerDisplayName: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    color: DESIGN_TEXT,
+    marginTop: 2,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  headerIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: DESIGN_SURFACE_BORDER,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0F1F1A',
+    shadowOpacity: 0.04,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  notifDot: {
+    position: 'absolute',
+    top: 8,
+    right: 9,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#E25C5C',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
 
   scroll: {
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
   },
 
-  balanceHeroWrap: {
-    marginTop: 24,
-    marginBottom: 8,
+  netCardOuter: {
+    marginTop: 18,
+    marginBottom: 4,
   },
-  balanceGradientCard: {
-    borderRadius: radii.xl,
-    padding: 24,
+  netCardGradient: {
+    borderRadius: 28,
+    paddingVertical: 22,
+    paddingHorizontal: 22,
     overflow: 'hidden',
+    position: 'relative',
   },
-  balanceCardRow: {
+  netOrbTop: {
+    position: 'absolute',
+    top: -80,
+    right: -50,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: 'rgba(79, 209, 167, 0.33)',
+    opacity: 0.45,
+  },
+  netOrbBottom: {
+    position: 'absolute',
+    bottom: -120,
+    left: -40,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: 'rgba(31, 168, 122, 0.2)',
+    opacity: 0.6,
+  },
+  netCardInner: {
+    position: 'relative',
+    zIndex: 2,
+  },
+  netCardTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginBottom: 6,
   },
-  balanceCardMain: {
-    flex: 1,
-    paddingRight: 12,
-    minWidth: 0,
-  },
-  balanceLabelOnDark: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 12,
-    fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 1.6,
-    color: 'rgba(255,255,255,0.72)',
-    marginBottom: 8,
-  },
-  balanceAmountOnDark: {
-    fontFamily: 'Manrope_800ExtraBold',
-    fontSize: 40,
-    fontWeight: '800',
-    letterSpacing: -1.5,
-    color: '#FFFFFF',
-  },
-  balanceLoaderDark: {
-    height: 72,
-    alignItems: 'flex-start',
-    justifyContent: 'center',
-    paddingVertical: 8,
-  },
-  balanceTrendBadge: {
-    alignSelf: 'flex-start',
-    marginTop: 14,
-    backgroundColor: '#B2DFDB',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: radii.full,
-  },
-  balanceTrendBadgeNeg: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  balanceTrendBadgeText: {
+  netBalanceLabel: {
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '600',
-    color: DASHBOARD_GREEN,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    color: 'rgba(255,255,255,0.7)',
   },
-  balanceTrendBadgeTextNeg: {
-    color: '#FFFFFF',
-  },
-  balanceDollarRing: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.35)',
+  netEyeBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  netAmountRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 6,
+  },
+  netAmountLeft: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  netAmountSplit: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 4,
+  },
+  netDollarSym: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 22,
+    fontWeight: '800',
+    color: 'rgba(255,255,255,0.85)',
+  },
+  netDollars: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 44,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: -1.5,
+  },
+  netCents: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 20,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.7)',
+    letterSpacing: -0.5,
+  },
+  netAmountHidden: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 36,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 4,
+  },
+  sparkHeroWrap: {
+    marginBottom: 4,
+  },
+  netWeeklyPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(79, 209, 167, 0.18)',
+    marginBottom: 10,
+  },
+  netWeeklyPillText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 11,
+    fontWeight: '700',
+    color: DESIGN_MINT,
+  },
+
+  yourPeopleSection: {
+    marginTop: 22,
+    paddingBottom: 8,
+  },
+  yourPeopleHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  yourPeopleTitle: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    color: DESIGN_TEXT,
+  },
+  segmentWrap: {
+    flexDirection: 'row',
+    gap: 6,
+    padding: 4,
+    marginTop: 12,
+    borderRadius: 14,
+    backgroundColor: '#EEF2F0',
+  },
+  segmentBtn: {
+    flex: 1,
+    paddingVertical: 9,
+    paddingHorizontal: 8,
+    borderRadius: 11,
+    alignItems: 'center',
+  },
+  segmentBtnActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#0F1F1A',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  segmentBtnText: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 13,
+    fontWeight: '700',
+    color: DESIGN_MUTED,
+  },
+  segmentBtnTextActive: {
+    color: DASHBOARD_GREEN,
+  },
+  yourPeopleList: {
+    marginTop: 14,
+    gap: 8,
+  },
+  yourPeopleListFlat: {
+    marginTop: 14,
+  },
+  personCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: DESIGN_SURFACE_BORDER,
+    shadowColor: '#0F1F1A',
+    shadowOpacity: 0.03,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  personAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  personAvatarLetter: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  personCardMid: {
+    flex: 1,
+    minWidth: 0,
+  },
+  personCardTitle: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 14,
+    fontWeight: '700',
+    color: DESIGN_TEXT,
+  },
+  personCardSub: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: DESIGN_MUTED,
+    marginTop: 2,
+  },
+  personCardRight: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  personCardAmt: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  personEmptyCard: {
+    alignItems: 'center',
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: DESIGN_SURFACE_BORDER,
+    gap: 8,
+  },
+  personEmptyTitle: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 15,
+    fontWeight: '700',
+    color: DESIGN_TEXT,
+  },
+  personEmptySub: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: DESIGN_MUTED,
+    textAlign: 'center',
+    lineHeight: 18,
   },
 
   section: {
@@ -1094,6 +1583,15 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     letterSpacing: -0.3,
+    color: colors.onSurface,
+  },
+  sectionTitleRecentActivity: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 20,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+    marginBottom: 15,
+    marginTop: -10,
     color: colors.onSurface,
   },
   viewAllText: {
@@ -1393,22 +1891,5 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textTransform: 'uppercase',
     letterSpacing: 1,
-  },
-
-  fab: {
-    position: 'absolute',
-    right: FAB_RIGHT,
-    bottom: FAB_BOTTOM,
-    zIndex: 40,
-  },
-  fabGradient: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fabGradientDisabled: {
-    opacity: 0.82,
   },
 });
