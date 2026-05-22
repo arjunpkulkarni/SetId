@@ -3,6 +3,11 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    # Persist + appendonly so a Redis crash mid-burst doesn't drop
+    # queued tasks. AOF replay is fast for our task volumes.
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -37,6 +42,8 @@ services:
       DATABASE_URL: ${DATABASE_URL_PROD:-${DATABASE_URL:-postgresql://postgres:postgres@db:5432/wealthsplit}}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      WS_REDIS_URL: ${WS_REDIS_URL:-redis://redis:6379/1}
+      RATE_LIMIT_REDIS_URL: ${RATE_LIMIT_REDIS_URL:-redis://redis:6379/2}
     depends_on:
       db:
         condition: service_healthy
@@ -47,7 +54,12 @@ services:
       - ./uploads:/app/uploads
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  worker:
+  # ─── Receipt parse worker ──────────────────────────────────────────
+  # Threads pool because the receipt pipeline is I/O-bound (vision API,
+  # cleanup LLM, DB). Concurrency=4 means 4 receipts in flight per pod.
+  # ``prefetch-multiplier=1`` (set globally in celery_app.py) ensures
+  # tasks aren't buffered in a single worker while siblings sit idle.
+  worker-parse:
     build: .
     env_file:
       - .env
@@ -63,7 +75,42 @@ services:
     volumes:
       - .:/app
       - ./uploads:/app/uploads
-    command: celery -A app.celery_app:celery_app worker -l info
+    command: >
+      celery -A app.celery_app:celery_app worker
+      -Q parse
+      --pool=threads
+      --concurrency=4
+      -n parse@%h
+      -l info
+
+  # ─── SMS worker ────────────────────────────────────────────────────
+  # Twilio is slow (~500ms-2s/send). Higher concurrency here so a
+  # bill with 20 guests fans out in ~1-2s instead of 20-40s, and so a
+  # burst of bills never starves the parse queue.
+  worker-sms:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL_PROD:-${DATABASE_URL:-postgresql://postgres:postgres@db:5432/wealthsplit}}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ./uploads:/app/uploads
+    command: >
+      celery -A app.celery_app:celery_app worker
+      -Q sms,default
+      --pool=threads
+      --concurrency=8
+      -n sms@%h
+      -l info
 
 volumes:
   pgdata:
+  redisdata:

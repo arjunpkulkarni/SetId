@@ -157,6 +157,8 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
 
     # Async receipt parse (Celery). If unset, FastAPI BackgroundTasks runs the worker in-process.
+    # In any non-toy deployment this MUST be set — otherwise an OCR/LLM
+    # call hogs a uvicorn worker for 5-30s and concurrent requests stall.
     CELERY_BROKER_URL: str | None = None
     CELERY_RESULT_BACKEND: str | None = None
 
@@ -166,6 +168,13 @@ class Settings(BaseSettings):
     # Setting this enables Redis pub/sub as the bus; every worker
     # subscribes and relays to its locally-connected sockets.
     WS_REDIS_URL: str | None = None
+
+    # Redis URL for the slowapi rate-limit counter store. Without this
+    # the limiter falls back to in-process memory, which means each
+    # uvicorn worker has its own counter and the effective limit is
+    # ``N_workers × stated_limit``. Reuses CELERY_BROKER_URL by default
+    # via app.limiter, but can be set explicitly to use a different DB.
+    RATE_LIMIT_REDIS_URL: str | None = None
 
     # Optional LLM pass for item-name normalization (dictionary always runs first).
     RECEIPT_NORMALIZE_USE_LLM: bool = False

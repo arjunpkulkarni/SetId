@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, Query, Up
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.celery_app import PARSE_QUEUE, parse_receipt_celery_task
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
@@ -23,6 +24,7 @@ from app.services.receipt_parse_job_service import (
     job_to_status_payload,
 )
 from app.services.receipt_parser_service import ReceiptParserService
+from app.utils.timing import Timer
 from app.workers.receipt_parse_worker import run_receipt_parse_job
 
 logger = logging.getLogger(__name__)
@@ -101,56 +103,67 @@ def parse_receipt(
     current_user: User = Depends(get_current_user),
 ):
     if sync:
-        logger.info(
-            "receipt_parse_sync_requested bill_id=%s user_id=%s",
-            bill_id,
-            current_user.id,
-        )
-        svc = ReceiptParserService(db)
-        try:
-            parsed = svc.parse_receipt(str(bill_id))
-        except ValueError as e:
-            logger.warning(
-                "receipt_parse_sync_failed bill_id=%s user_id=%s error=%s",
-                bill_id,
-                current_user.id,
-                e,
-            )
-            return error_response("PARSE_ERROR", str(e), 400)
-        except Exception:
-            logger.exception(
-                "receipt_parse_sync_unexpected_error bill_id=%s user_id=%s",
-                bill_id,
-                current_user.id,
-            )
-            raise
+        with Timer(
+            "receipt.parse_sync",
+            bill_id=str(bill_id),
+            user_id=str(current_user.id),
+        ) as t:
+            svc = ReceiptParserService(db)
+            try:
+                parsed = svc.parse_receipt(str(bill_id))
+            except ValueError as e:
+                t.add(failed="true", reason=str(e)[:80])
+                return error_response("PARSE_ERROR", str(e), 400)
 
-        logger.info(
-            "receipt_parse_sync_succeeded bill_id=%s user_id=%s item_count=%s total=%s",
-            bill_id,
-            current_user.id,
-            len(parsed.items),
-            parsed.total,
-        )
+            t.add(items=len(parsed.items), total=parsed.total)
+
         return success_response(
             data=parsed.model_dump(mode="json", exclude_none=True),
             message="Receipt parsed successfully",
         )
 
-    job = get_or_create_parse_job(db, bill_id=bill_id, idempotency_key=idempotency_key)
-    if job.status == "queued":
-        if claim_parse_job(db, job.id):
-            if settings.CELERY_BROKER_URL:
-                from app.celery_app import parse_receipt_celery_task
+    # ─── Async path: enqueue and return ASAP. ─────────────────────────
+    # Every DB roundtrip here adds to user-perceived latency, so we
+    # keep this tight: 1 SELECT/INSERT for idempotency, 1 UPDATE to
+    # claim, 1 Redis publish. No `db.refresh(job)` — we already know
+    # the state we just wrote.
+    with Timer(
+        "receipt.parse_enqueue",
+        bill_id=str(bill_id),
+        user_id=str(current_user.id),
+        idempotency_key=idempotency_key or "-",
+    ) as t:
+        job = get_or_create_parse_job(
+            db, bill_id=bill_id, idempotency_key=idempotency_key
+        )
+        t.lap("job_resolved", job_id=str(job.id), status=job.status)
 
-                parse_receipt_celery_task.delay(str(job.id))
-            else:
-                background_tasks.add_task(run_receipt_parse_job, str(job.id))
-    db.refresh(job)
+        enqueued = False
+        if job.status == "queued":
+            if claim_parse_job(db, job.id):
+                # Use the dedicated parse queue with high priority so a
+                # backlog of SMS sends can't delay it.
+                if settings.CELERY_BROKER_URL:
+                    parse_receipt_celery_task.apply_async(
+                        args=(str(job.id),),
+                        queue=PARSE_QUEUE,
+                        # Lower number = higher priority in Celery/Redis.
+                        priority=0,
+                    )
+                    enqueued = True
+                else:
+                    background_tasks.add_task(run_receipt_parse_job, str(job.id))
+                    enqueued = True
 
-    payload = {"job_id": str(job.id), "status": job.status}
+        # ``processing`` here means we just won the claim; tell the
+        # client that, not the stale ``queued`` we read.
+        status_for_client = "processing" if enqueued else job.status
+        t.add(enqueued=str(enqueued).lower(), final_status=status_for_client)
+
+    payload: dict = {"job_id": str(job.id), "status": status_for_client}
     if job.status == "completed" and job.result_json:
         payload["result"] = job.result_json
+        payload["status"] = "completed"
 
     return success_response(data=payload, message="Parse job accepted")
 
