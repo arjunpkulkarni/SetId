@@ -9,6 +9,7 @@ from app.core.security import decode_access_token
 from app.models.user import User
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 
 
 def _auth_error(status_code: int, code: str, message: str) -> HTTPException:
@@ -58,3 +59,23 @@ def get_current_user(
             "No profile exists for this account. Complete onboarding first.",
         )
     return user
+
+
+def get_optional_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
+    db: Session = Depends(get_db),
+) -> User | None:
+    if credentials is None:
+        return None
+    payload = decode_access_token(credentials.credentials)
+    if not payload or not payload.get("sub"):
+        return None
+    try:
+        uuid.UUID(str(payload["sub"]))
+    except ValueError:
+        return None
+    return (
+        db.query(User)
+        .filter(User.id == payload["sub"], User.is_active.is_(True))
+        .first()
+    )

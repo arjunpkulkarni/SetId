@@ -25,6 +25,7 @@ import {
   withPayoutSetupRetry,
 } from '../utils/payoutErrors';
 import { markPayoutVerificationSubmittedOptimistically } from '../utils/payoutOptimisticUi';
+import PlaidBankLinkButton from '../components/PlaidBankLinkButton';
 
 function digitsOnly(v) {
   return String(v ?? '').replace(/\D/g, '');
@@ -51,6 +52,7 @@ export default function UpdatePayoutCardScreen({ navigation, route }) {
   const [bankAccount, setBankAccount] = useState('');
   const [accountHolderName, setAccountHolderName] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [bankManualEntry, setBankManualEntry] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,7 +77,7 @@ export default function UpdatePayoutCardScreen({ navigation, route }) {
     && accountHolderName.trim().length > 1;
 
   const canSubmit =
-    payoutChannel === 'card' ? cardComplete : bankReady;
+    payoutChannel === 'card' ? cardComplete : bankManualEntry && bankReady;
 
   const handleSubmit = async () => {
     if (submitting) return;
@@ -320,6 +322,38 @@ export default function UpdatePayoutCardScreen({ navigation, route }) {
             </>
           ) : (
             <>
+              <PlaidBankLinkButton
+                purpose="payout"
+                onLinked={() => {
+                  markPayoutVerificationSubmittedOptimistically();
+                  Alert.alert(
+                    'Payout method updated',
+                    'Future payouts will go to your new bank account.',
+                    [
+                      {
+                        text: 'Done',
+                        onPress: () => {
+                          if (typeof onUpdated === 'function') onUpdated();
+                          navigation.goBack();
+                        },
+                      },
+                    ],
+                  );
+                }}
+              />
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => setBankManualEntry((v) => !v)}
+                style={styles.manualBankToggle}
+              >
+                <Text style={styles.manualBankToggleText}>
+                  {bankManualEntry
+                    ? 'Hide manual entry'
+                    : 'Enter bank manually instead'}
+                </Text>
+              </TouchableOpacity>
+              {bankManualEntry ? (
+                <>
               <Text style={styles.bankFieldLabel}>Name on account</Text>
               <TextInput
                 style={styles.bankInput}
@@ -354,10 +388,13 @@ export default function UpdatePayoutCardScreen({ navigation, route }) {
               <Text style={styles.helpText}>
                 US checking account. ACH deposits typically take 1–3 business days.
               </Text>
+                </>
+              ) : null}
             </>
           )}
         </View>
 
+        {(payoutChannel === 'card' || bankManualEntry) ? (
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={handleSubmit}
@@ -383,6 +420,7 @@ export default function UpdatePayoutCardScreen({ navigation, route }) {
             )}
           </LinearGradient>
         </TouchableOpacity>
+        ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -526,6 +564,16 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     lineHeight: 16,
     marginTop: 4,
+  },
+  manualBankToggle: {
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  manualBankToggleText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: colors.secondary,
+    textDecorationLine: 'underline',
   },
   submitBtn: {
     marginTop: 12,

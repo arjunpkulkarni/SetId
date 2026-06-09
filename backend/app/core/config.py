@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     # Feature flags
     FEATURE_VIRTUAL_CARDS: bool = False
 
+    # ─── Plaid (Auth → Stripe bank token) ─────────────────────────────
+    PLAID_CLIENT_ID: str = ""
+    PLAID_SECRET: str = ""
+    PLAID_ENV: str = "sandbox"  # sandbox | production
+    PLAID_PRODUCTS: list[str] = ["auth"]
+    PLAID_ENABLED: bool = False
+    # Web OAuth return for Plaid Link (guest pay on pay.settld.live, etc.)
+    PLAID_REDIRECT_URI: str = ""
+
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str | None = None
     OPENAI_RECEIPT_VISION_MODEL: str = "gpt-4.1"

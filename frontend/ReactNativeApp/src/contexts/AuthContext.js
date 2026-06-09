@@ -36,7 +36,14 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     (async () => {
       try {
-        const stored = await getToken();
+        const demoAuto =
+          process.env.EXPO_PUBLIC_DEMO_AUTO_RUN === '1'
+            ? (process.env.EXPO_PUBLIC_DEMO_AUTO_TOKEN || '').trim()
+            : '';
+        const stored = demoAuto || (await getToken());
+        if (demoAuto) {
+          await setToken(demoAuto);
+        }
         setTokenState(stored);
         if (stored) {
           // Immediately set loading to false if we have a token
@@ -49,6 +56,10 @@ export function AuthProvider({ children }) {
             if (e instanceof ApiError && e.code === 'PROFILE_NOT_FOUND') {
               setUser(null);
               setNeedsOnboarding(true);
+            } else if (demoAuto) {
+              // Perf demo: keep JWT from API script even if /me hiccups briefly.
+              setUser({ id: 'demo-perf', display_name: 'Perf Demo' });
+              setNeedsOnboarding(false);
             } else {
               await removeToken();
               setTokenState(null);

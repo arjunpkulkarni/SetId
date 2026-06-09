@@ -39,16 +39,20 @@ export default function PartyPayPage() {
 
   useEffect(() => { fetchConfirmation(); }, [fetchConfirmation]);
 
-  const handleSuccess = async () => {
-    try {
-      await notifyPaymentComplete(token);
-    } catch {
-      // Best-effort notification; webhook will also handle it
+  const handleSuccess = async (meta) => {
+    if (!meta?.processing) {
+      try {
+        await notifyPaymentComplete(token);
+      } catch {
+        // Best-effort notification; webhook will also handle it
+      }
     }
     navigate('/success', {
       state: {
         amount: paymentInfo?.amount ?? paymentInfo?.breakdown?.total_owed,
         billTitle: billTitle || 'Your bill',
+        processing: meta?.processing,
+        bankLast4: meta?.bankLast4,
       },
     });
   };
@@ -128,6 +132,9 @@ export default function PartyPayPage() {
               amount={totalAmount}
               billTitle={billTitle}
               clientSecret={clientSecret}
+              paymentId={paymentInfo.payment_id}
+              payToken={paymentInfo.payment_link_token}
+              plaidEnabled={!!paymentInfo.plaid_enabled}
               onSuccess={handleSuccess}
               onError={handleError}
             />

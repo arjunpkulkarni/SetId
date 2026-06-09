@@ -266,10 +266,23 @@ export const receipts = {
 
   get: (billId) => client.get(`/bills/${billId}/receipt`),
 
+  /** Legacy: blocks until OCR/LLM finishes (ties up the HTTP connection). */
   parse: (billId) =>
     client.post(`/bills/${billId}/receipt/parse`, null, {
       params: { sync: true },
       timeout: RECEIPT_LONG_TIMEOUT_MS,
+    }),
+
+  /** Fast accept — work runs on Celery ``parse`` queue; poll ``parseStatus``. */
+  parseAsync: (billId, { idempotencyKey } = {}) =>
+    client.post(`/bills/${billId}/receipt/parse`, null, {
+      headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+      timeout: DEFAULT_HTTP_TIMEOUT_MS,
+    }),
+
+  parseStatus: (billId, jobId) =>
+    client.get(`/bills/${billId}/receipt/parse-status/${jobId}`, {
+      timeout: DEFAULT_HTTP_TIMEOUT_MS,
     }),
 
   listItems: (billId) => client.get(`/bills/${billId}/receipt/items`),
@@ -393,6 +406,13 @@ export const virtualCards = {
   getEphemeralKey: (billId) => client.post(`/bills/${billId}/virtual-card/ephemeral-key`),
   
   deactivate: (billId) => client.post(`/bills/${billId}/virtual-card/deactivate`),
+};
+
+// ─── Plaid (bank linking → Stripe btok) ─────────────────────────────────────
+export const plaid = {
+  createLinkToken: (payload) => client.post('/plaid/link-token', payload),
+  completePayout: (payload) => client.post('/plaid/complete-payout', payload),
+  completeGuestPay: (payload) => client.post('/plaid/complete-guest-pay', payload),
 };
 
 // ─── Stripe Connect (host payouts) ───────────────────────────────────────────

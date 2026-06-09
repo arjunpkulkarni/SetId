@@ -135,3 +135,9 @@ Thumbs.db
 
 # Local test scripts (not for CI)
 test_local.py
+
+# Perf demo artifacts
+demo-recordings/*.mp4
+demo-recordings/*.mov
+.demo_perf_bill_id
+/tmp/settld_demo_bill_id

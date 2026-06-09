@@ -52,12 +52,14 @@ try:
             # bursty traffic (no per-minute boundary cliff), and Redis is
             # the only backend that supports it without a memory leak.
             strategy="moving-window",
-            headers_enabled=True,
+            # Our routes return plain dicts via success_response(), not
+            # starlette.Response — headers_enabled=True crashes slowapi.
+            headers_enabled=False,
         )
         logger.info("event=limiter.init backend=redis storage_uri=%s", _storage_uri)
     else:
-        limiter = Limiter(key_func=_client_ip, headers_enabled=True)
+        limiter = Limiter(key_func=_client_ip, headers_enabled=False)
         logger.info("event=limiter.init backend=in-memory")
 except Exception:  # pragma: no cover - defensive fallback
     logger.exception("event=limiter.init.failed_falling_back_to_memory")
-    limiter = Limiter(key_func=_client_ip, headers_enabled=True)
+    limiter = Limiter(key_func=_client_ip, headers_enabled=False)

@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  ScrollView,
   useWindowDimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -19,7 +20,33 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { colors, radii, shadows } from '../theme';
 import { receipts } from '../services/api';
+import { startTimer, endTimer, markEvent } from '../utils/performance';
 import * as ImagePicker from 'expo-image-picker';
+
+const USE_ASYNC_PARSE = process.env.EXPO_PUBLIC_ASYNC_RECEIPT_PARSE === '1';
+const PARSE_POLL_MS = 1500;
+const PARSE_POLL_MAX_MS = 120_000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollParseUntilDone(billId, jobId) {
+  const started = Date.now();
+  while (Date.now() - started < PARSE_POLL_MAX_MS) {
+    const st = await receipts.parseStatus(billId, jobId);
+    const status = st?.data?.status;
+    if (status === 'completed') {
+      return { status, result: st?.data?.result, pollMs: Date.now() - started };
+    }
+    if (status === 'failed') {
+      const err = st?.data?.error || 'Receipt parse failed';
+      throw new Error(typeof err === 'string' ? err : 'Receipt parse failed');
+    }
+    await sleep(PARSE_POLL_MS);
+  }
+  throw new Error('Receipt parse timed out. Try again.');
+}
 
 // Downscale receipts to ~2000px on the long edge before upload. Keeps
 // payloads under ~1MB on a full iPhone JPEG, which sidesteps any nginx
@@ -85,6 +112,32 @@ function ScanLine({ reticleHeight }) {
       />
     </Animated.View>
   );
+}
+
+function formatMoney(value) {
+  const n = parseFloat(value ?? 0);
+  if (!Number.isFinite(n)) return '$0.00';
+  return `$${n.toFixed(2)}`;
+}
+
+function itemLinePrice(item) {
+  if (item?.total_price != null) return formatMoney(item.total_price);
+  if (item?.price != null) return formatMoney(item.price);
+  const unit = parseFloat(item?.unit_price ?? 0);
+  const qty = Math.max(1, Number(item?.quantity ?? 1));
+  if (Number.isFinite(unit) && unit > 0) return formatMoney(unit * qty);
+  return '$0.00';
+}
+
+function parsedItemsForDisplay(parsed) {
+  if (!parsed) return [];
+  const raw = Array.isArray(parsed.items) ? parsed.items : [];
+  return raw.map((it, index) => ({
+    key: String(it.id ?? `${it.name ?? 'item'}-${index}`),
+    name: (it.name || 'Item').trim(),
+    qty: Math.max(1, Math.floor(Number(it.quantity ?? 1))),
+    price: itemLinePrice(it),
+  }));
 }
 
 function CornerBracket({ position }) {
@@ -172,24 +225,49 @@ export default function ScanReceiptScreen({ navigation, route }) {
     setQueuedImages((prev) => [...prev, image]);
   }, []);
 
-  const processQueuedImages = useCallback(async () => {
-    if (!queuedImages.length) {
-      Alert.alert('No images yet', 'Capture or choose at least one receipt image first.');
+  const processQueuedImages = useCallback(async (overrideImages, { autoRun: fromAutoRun } = {}) => {
+    const images = overrideImages ?? queuedImages;
+    if (!images.length) {
+      if (!fromAutoRun) {
+        Alert.alert('No images yet', 'Capture or choose at least one receipt image first.');
+      }
       return;
     }
 
     try {
       setUploading(true);
       // Upload pages in order. First request replaces prior receipt; remaining requests append.
-      for (let i = 0; i < queuedImages.length; i += 1) {
+      for (let i = 0; i < images.length; i += 1) {
         const isAppend = i > 0;
-        await receipts.upload(billId, queuedImages[i], { append: isAppend });
+        await receipts.upload(billId, images[i], { append: isAppend });
       }
       setUploading(false);
 
       setParsing(true);
-      // Parse once after all pages are uploaded so backend can run merge/dedupe totals.
-      const parseRes = await receipts.parse(billId);
+      startTimer('receipt_parse_total');
+      let parseRes;
+      if (USE_ASYNC_PARSE) {
+        startTimer('receipt_parse_enqueue');
+        const enqueueRes = await receipts.parseAsync(billId);
+        endTimer('receipt_parse_enqueue');
+        const jobId = enqueueRes?.data?.job_id;
+        const initialStatus = enqueueRes?.data?.status;
+        markEvent('receipt_parse_async_enqueued', { jobId, status: initialStatus });
+        if (initialStatus === 'completed' && enqueueRes?.data?.result) {
+          parseRes = { data: enqueueRes.data.result };
+        } else if (jobId) {
+          startTimer('receipt_parse_poll');
+          const polled = await pollParseUntilDone(billId, jobId);
+          endTimer('receipt_parse_poll');
+          markEvent('receipt_parse_async_done', { pollMs: polled.pollMs });
+          parseRes = { data: polled.result };
+        } else {
+          parseRes = enqueueRes;
+        }
+      } else {
+        parseRes = await receipts.parse(billId);
+      }
+      endTimer('receipt_parse_total');
 
       // Expand any multi-quantity lines into individual quantity=1 rows so
       // each unit can be assigned to a different member. "2 Chicken
@@ -215,6 +293,11 @@ export default function ScanReceiptScreen({ navigation, route }) {
       const needsExpansion = storedItems.some(
         (it) => it?.id && Math.floor(Number(it.quantity ?? 1)) > 1,
       );
+
+      let finalParsed = parseRes?.data ?? {};
+      if (storedItems.length > 0) {
+        finalParsed = { ...finalParsed, items: storedItems };
+      }
 
       if (needsExpansion) {
         const deletes = [];
@@ -248,22 +331,28 @@ export default function ScanReceiptScreen({ navigation, route }) {
               deletes,
             });
             const syncedItems = syncRes?.data?.items ?? [];
-            setParsedData({
-              ...parseRes.data,
-              items: syncedItems.length > 0 ? syncedItems : parseRes.data?.items,
-            });
+            finalParsed = {
+              ...finalParsed,
+              items: syncedItems.length > 0 ? syncedItems : finalParsed.items,
+            };
           } catch (syncErr) {
             if (__DEV__) console.warn('[SCAN] expansion sync failed', syncErr);
-            setParsedData(parseRes.data);
           }
-        } else {
-          setParsedData(parseRes.data);
         }
-      } else {
-        setParsedData(parseRes.data);
       }
 
+      setParsedData(finalParsed);
       setParsing(false);
+
+      if (fromAutoRun) {
+        // Stay on scan screen — lazy ReceiptSetupTip chunk often fails in Expo Go
+        // automated runs ("Could not load bundle"). Parsed items panel stays visible.
+        const names = parsedItemsForDisplay(finalParsed).map((i) => i.name);
+        console.log('DEMO_PERF_UI_ITEMS', JSON.stringify(names));
+        await new Promise((r) => setTimeout(r, 6000));
+        console.log('DEMO_PERF_UI_COMPLETE');
+        return;
+      }
 
       setTimeout(() => {
         navigation.replace('ReceiptSetupTip', { billId });
@@ -271,12 +360,41 @@ export default function ScanReceiptScreen({ navigation, route }) {
     } catch (err) {
       setUploading(false);
       setParsing(false);
-      // Unfreeze so the user can re-aim and retry — otherwise they'd be
-      // stuck staring at a frozen image with no obvious next step.
       setLastCaptureUri(null);
-      Alert.alert('Error', err?.message ?? err?.error?.message ?? 'Failed to process receipt');
+      if (fromAutoRun) {
+        console.error('DEMO_PERF_UI_FAILED', err?.message ?? err);
+      } else {
+        Alert.alert('Error', err?.message ?? err?.error?.message ?? 'Failed to process receipt');
+      }
     }
   }, [billId, navigation, queuedImages]);
+
+  const autoRunTriggered = useRef(false);
+  useEffect(() => {
+    if (!route?.params?.autoRun || !billId || autoRunTriggered.current) return;
+    autoRunTriggered.current = true;
+
+    (async () => {
+      try {
+        const { Asset } = require('expo-asset');
+        const asset = Asset.fromModule(require('../../assets/demo-receipt.jpg'));
+        if (!asset.downloaded) {
+          await asset.downloadAsync();
+        }
+        const uri = asset.localUri || asset.uri;
+        const downscaled = await downscaleReceiptImage(uri);
+        const file = {
+          uri: downscaled.uri,
+          name: `demo-receipt.${downscaled.ext}`,
+          type: downscaled.mime,
+        };
+        setLastCaptureUri(downscaled.uri);
+        await processQueuedImages([file], { autoRun: true });
+      } catch (err) {
+        console.error('DEMO_PERF_UI_FAILED', err?.message ?? err);
+      }
+    })();
+  }, [route?.params?.autoRun, billId, processQueuedImages]);
 
   const captureFromPreview = async () => {
     if (!cameraRef.current || !cameraReady) {
@@ -362,6 +480,8 @@ export default function ScanReceiptScreen({ navigation, route }) {
   };
 
   const busy = uploading || parsing || capturing;
+  const parsedItems = parsedItemsForDisplay(parsedData);
+  const isAutoDemo = route?.params?.autoRun === true;
   const canUseCamera = permission?.granted;
   // `frozen` = we're showing a still image instead of the live camera feed.
   // Captured images live here during review + processing so the user can
@@ -599,6 +719,81 @@ export default function ScanReceiptScreen({ navigation, route }) {
         {busy && (
           <View style={styles.loadingRow}>
             <ActivityIndicator size="large" color={colors.secondary} />
+            <Text style={styles.loadingLabel}>
+              {parsing ? 'Parsing receipt…' : uploading ? 'Uploading…' : 'Working…'}
+            </Text>
+          </View>
+        )}
+
+        {!busy && parsedData && (
+          <View style={styles.parsedPanel}>
+            {(parsedData.merchant_name || parsedData.merchant) ? (
+              <Text style={styles.parsedMerchant} numberOfLines={1}>
+                {parsedData.merchant_name || parsedData.merchant}
+              </Text>
+            ) : null}
+            <Text style={styles.parsedHeading}>
+              {parsedItems.length > 0
+                ? `${parsedItems.length} item${parsedItems.length === 1 ? '' : 's'} found`
+                : 'Receipt parsed'}
+            </Text>
+            {parsedItems.length > 0 ? (
+              <ScrollView
+                style={styles.parsedList}
+                nestedScrollEnabled
+                showsVerticalScrollIndicator={false}
+              >
+                {parsedItems.map((item) => (
+                  <View key={item.key} style={styles.parsedRow}>
+                    <Text style={styles.parsedItemName} numberOfLines={2}>
+                      {item.qty > 1 ? `${item.qty}× ` : ''}
+                      {item.name}
+                    </Text>
+                    <Text style={styles.parsedItemPrice}>{item.price}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <Text style={styles.parsedEmpty}>No line items returned — check the bill.</Text>
+            )}
+            {(parsedData.subtotal != null || parsedData.tax != null || parsedData.total != null) && (
+              <View style={styles.parsedTotals}>
+                {parsedData.subtotal != null && (
+                  <View style={styles.parsedSummaryRow}>
+                    <Text style={styles.parsedSummaryLabel}>Subtotal</Text>
+                    <Text style={styles.parsedSummaryValue}>{formatMoney(parsedData.subtotal)}</Text>
+                  </View>
+                )}
+                {parsedData.tax != null && parseFloat(parsedData.tax) > 0 && (
+                  <View style={styles.parsedSummaryRow}>
+                    <Text style={styles.parsedSummaryLabel}>Tax</Text>
+                    <Text style={styles.parsedSummaryValue}>{formatMoney(parsedData.tax)}</Text>
+                  </View>
+                )}
+                {parsedData.total != null && (
+                  <View style={[styles.parsedSummaryRow, styles.parsedSummaryRowTotal]}>
+                    <Text style={styles.parsedTotalLabel}>Total</Text>
+                    <Text style={styles.parsedTotalValue}>{formatMoney(parsedData.total)}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+            {!isAutoDemo && (
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => navigation.replace('ReceiptSetupTip', { billId })}
+                style={styles.actionBtnFull}
+              >
+                <LinearGradient
+                  colors={[colors.secondary, colors.secondaryDim]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.actionGradient}
+                >
+                  <Text style={styles.actionTextPrimary}>Continue</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -849,6 +1044,103 @@ const styles = StyleSheet.create({
   loadingRow: {
     alignItems: 'center',
     paddingVertical: 16,
+    gap: 10,
+  },
+  loadingLabel: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.75)',
+  },
+  parsedPanel: {
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderRadius: radii.xl,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 14,
+    gap: 10,
+    maxHeight: 360,
+  },
+  parsedMerchant: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 17,
+    fontWeight: '800',
+    color: colors.secondary,
+    letterSpacing: -0.3,
+  },
+  parsedHeading: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    color: 'rgba(10, 91, 73, 0.65)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  parsedList: {
+    maxHeight: 180,
+  },
+  parsedRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(10, 91, 73, 0.12)',
+  },
+  parsedItemName: {
+    flex: 1,
+    fontFamily: 'Inter_500Medium',
+    fontSize: 15,
+    color: '#1a2e2a',
+    lineHeight: 20,
+  },
+  parsedItemPrice: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1a2e2a',
+  },
+  parsedEmpty: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: 'rgba(10, 91, 73, 0.55)',
+    paddingVertical: 8,
+  },
+  parsedTotals: {
+    gap: 4,
+    paddingTop: 4,
+  },
+  parsedSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  parsedSummaryRowTotal: {
+    marginTop: 4,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(10, 91, 73, 0.15)',
+  },
+  parsedSummaryLabel: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: 'rgba(10, 91, 73, 0.65)',
+  },
+  parsedSummaryValue: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: '#1a2e2a',
+  },
+  parsedTotalLabel: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1a2e2a',
+  },
+  parsedTotalValue: {
+    fontFamily: 'Manrope_800ExtraBold',
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.secondary,
   },
   skipBtn: {
     alignItems: 'center',

@@ -27,3 +27,4 @@ PyJWT==2.9.0
 slowapi==0.1.9
 celery[redis]==5.4.0
 redis==5.0.8
+plaid-python==29.0.0

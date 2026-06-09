@@ -59,6 +59,7 @@ module.exports = {
           enableGooglePay: false,
         },
       ],
+      'react-native-plaid-link-sdk',
     ],
     extra: {
       eas: {

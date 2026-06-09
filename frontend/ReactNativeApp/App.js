@@ -16,6 +16,8 @@ import {
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
+import DemoPerfController from './src/demo/DemoPerfController';
+import { demoPerfNavigationRef } from './src/demo/demoPerfNavigation';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { StripeProvider } from '@stripe/stripe-react-native';
@@ -259,9 +261,10 @@ export default function App() {
             publishableKey="pk_live_51RF1vSA5ckD2kd7M4w7D7m5FPVLiZNSjAUy1VcwulfDZOvmeLZ62RPK8igrgmhKmj34BtdXDO7CBZSPuWGjHjKin00yWltIKKh"
           >
             <AuthProvider>
-              <NavigationContainer>
+              <NavigationContainer ref={demoPerfNavigationRef}>
                 <StatusBar style="dark" />
                 <RootNavigator />
+                <DemoPerfController />
                 <OfflineBanner />
               </NavigationContainer>
             </AuthProvider>

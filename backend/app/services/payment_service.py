@@ -110,6 +110,7 @@ def _stripe_intent_for_payment(
     *,
     destination_account_id: str | None = None,
     application_fee_cents: int = 0,
+    payment_method_types: list[str] | None = None,
 ) -> tuple[str, str]:
     """Create (or mock) a Stripe PaymentIntent for a guest's share.
 
@@ -149,6 +150,8 @@ def _stripe_intent_for_payment(
                 "member_id": str(member_id),
             },
         }
+        if payment_method_types:
+            intent_kwargs["payment_method_types"] = payment_method_types
 
         if destination_account_id:
             # Destination charge — money routes to the host's connected
@@ -416,6 +419,192 @@ class PaymentService:
             .all()
         )
 
+    def _ensure_bank_payment_intent(self, payment: Payment) -> Payment:
+        """Replace card-only PI with one that accepts US bank account (ACH)."""
+        if not settings.STRIPE_SECRET_KEY:
+            return payment
+
+        import stripe
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        destination = _lookup_host_destination(self.db, str(payment.bill_id))
+        amount_cents = int((payment.amount or Decimal("0")) * 100)
+        app_fee_cents = (
+            _application_fee_for_member(
+                self.db,
+                str(payment.bill_id),
+                str(payment.bill_member_id),
+                amount_cents,
+            )
+            if destination
+            else 0
+        )
+
+        old_pi = (payment.stripe_payment_intent_id or "").strip()
+        if old_pi and not old_pi.startswith("pi_mock_"):
+            try:
+                stripe.PaymentIntent.cancel(old_pi)
+            except stripe.error.StripeError:
+                logger.warning(
+                    "could_not_cancel_old_pi",
+                    extra={"payment_id": str(payment.id), "pi": old_pi},
+                )
+
+        stripe_pi_id, stripe_client_secret = _stripe_intent_for_payment(
+            str(payment.bill_id),
+            str(payment.bill_member_id),
+            payment.amount,
+            payment.currency or "USD",
+            destination_account_id=destination,
+            application_fee_cents=app_fee_cents,
+            payment_method_types=["us_bank_account"],
+        )
+        payment.stripe_payment_intent_id = stripe_pi_id
+        payment.stripe_client_secret = stripe_client_secret
+        self.db.commit()
+        self.db.refresh(payment)
+        return payment
+
+    def _get_or_create_payer_customer(self, payment: Payment) -> str:
+        import stripe
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        member = payment.member
+        user = None
+        if payment.user_id:
+            user = (
+                self.db.query(User).filter(User.id == payment.user_id).first()
+            )
+
+        metadata = {
+            "payment_id": str(payment.id),
+            "bill_member_id": str(payment.bill_member_id),
+        }
+        email = None
+        name = None
+        if user and user.email:
+            email = user.email
+        if member and member.nickname:
+            name = member.nickname
+        if user and getattr(user, "full_name", None):
+            name = user.full_name or name
+
+        if user and user.stripe_customer_id:
+            try:
+                stripe.Customer.modify(
+                    user.stripe_customer_id,
+                    email=email or None,
+                    name=name or None,
+                    metadata=metadata,
+                )
+            except stripe.error.StripeError:
+                pass
+            return user.stripe_customer_id
+
+        customer = stripe.Customer.create(
+            email=email,
+            name=name,
+            metadata=metadata,
+        )
+        if user:
+            user.stripe_customer_id = customer.id
+            self.db.commit()
+        return customer.id
+
+    def complete_guest_pay_with_bank_token(
+        self,
+        payment: Payment,
+        bank_token: str,
+        *,
+        client_ip: str = "0.0.0.0",
+        user_agent: str = "settld-web",
+    ) -> Payment:
+        """Confirm a guest PaymentIntent using a Plaid-processor ``btok_``."""
+        if payment.status not in ("pending", "processing"):
+            raise ValueError("Payment is not open for bank pay")
+
+        from app.services.guest_pay_gate import assert_guest_payment_allowed
+
+        assert_guest_payment_allowed(payment.bill)
+
+        if not settings.STRIPE_SECRET_KEY:
+            payment.status = "succeeded"
+            member = (
+                self.db.query(BillMember)
+                .filter(BillMember.id == payment.bill_member_id)
+                .first()
+            )
+            if member:
+                member.status = "paid"
+            self.db.commit()
+            self.db.refresh(payment)
+            return payment
+
+        import stripe
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        btok = (bank_token or "").strip()
+        if not btok:
+            raise ValueError("INVALID_BANK_TOKEN")
+
+        tok = stripe.Token.retrieve(btok)
+        if getattr(tok, "type", None) != "bank_account":
+            raise ValueError("INVALID_BANK_TOKEN")
+
+        payment = self._ensure_bank_payment_intent(payment)
+        customer_id = self._get_or_create_payer_customer(payment)
+
+        try:
+            stripe.Customer.create_source(customer_id, source=btok)
+        except stripe.error.StripeError as e:
+            raise ValueError(f"Bank attach failed: {e.user_message or str(e)}") from e
+
+        pi_id = payment.stripe_payment_intent_id
+        if not pi_id:
+            raise ValueError("Payment intent missing")
+
+        try:
+            confirmed = stripe.PaymentIntent.modify(
+                pi_id,
+                customer=customer_id,
+            )
+            confirmed = stripe.PaymentIntent.confirm(
+                pi_id,
+                mandate_data={
+                    "customer_acceptance": {
+                        "type": "online",
+                        "online": {
+                            "ip_address": client_ip,
+                            "user_agent": user_agent,
+                        },
+                    },
+                },
+            )
+        except stripe.error.StripeError as e:
+            raise ValueError(f"Bank payment failed: {e.user_message or str(e)}") from e
+
+        pi_status = getattr(confirmed, "status", None)
+        if pi_status == "succeeded":
+            payment.status = "succeeded"
+            member = (
+                self.db.query(BillMember)
+                .filter(BillMember.id == payment.bill_member_id)
+                .first()
+            )
+            if member:
+                member.status = "paid"
+        elif pi_status in ("processing", "requires_action"):
+            payment.status = "processing"
+        elif pi_status == "requires_payment_method":
+            payment.status = "failed"
+            raise ValueError("Bank payment could not be completed. Try another account.")
+        else:
+            payment.status = "processing"
+
+        self.db.commit()
+        self.db.refresh(payment)
+        return payment
+
     def confirm_payment(self, payment_id: str) -> Payment:
         payment = self.db.query(Payment).filter(Payment.id == payment_id).first()
         if not payment:
@@ -474,6 +663,18 @@ class PaymentService:
                 logger.info(f"Payment {payment.id} succeeded via webhook")
             else:
                 logger.warning(f"No payment found for PaymentIntent {pi_id}")
+
+        elif event_type == "payment_intent.processing":
+            pi_id = data_object["id"]
+            payment = (
+                self.db.query(Payment)
+                .filter(Payment.stripe_payment_intent_id == pi_id)
+                .first()
+            )
+            if payment and payment.status == "pending":
+                payment.status = "processing"
+                self.db.commit()
+                logger.info(f"Payment {payment.id} processing via webhook (ACH)")
 
         elif event_type == "payment_intent.payment_failed":
             pi_id = data_object["id"]

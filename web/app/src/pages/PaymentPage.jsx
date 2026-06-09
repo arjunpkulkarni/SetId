@@ -53,12 +53,14 @@ export default function PaymentPage() {
 
   useEffect(() => { fetchPayment(); }, [fetchPayment]);
 
-  const handleSuccess = () => {
+  const handleSuccess = (meta) => {
     navigate('/success', {
       state: {
         amount: paymentData?.total ?? paymentData?.amount,
         billTitle: paymentData?.bill_title,
         merchantName: paymentData?.merchant_name,
+        processing: meta?.processing,
+        bankLast4: meta?.bankLast4,
       },
     });
   };
@@ -128,6 +130,9 @@ export default function PaymentPage() {
               amount={totalAmount}
               billTitle={billTitle}
               clientSecret={clientSecret}
+              paymentId={paymentData.payment_id}
+              payToken={token}
+              plaidEnabled={!!paymentData.plaid_enabled}
               onSuccess={handleSuccess}
             />
           </Elements>

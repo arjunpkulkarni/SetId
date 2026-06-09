@@ -622,10 +622,12 @@ def confirm_and_pay(token: str, db: Session = Depends(get_db)):
 
     return success_response(data={
         "payment_id": str(payment.id),
+        "payment_link_token": payment.payment_link_token,
         "amount": str(payment.amount),
         "currency": payment.currency,
         "stripe_client_secret": payment.stripe_client_secret,
         "stripe_publishable_key": settings.STRIPE_PUBLISHABLE_KEY,
+        "plaid_enabled": settings.PLAID_ENABLED,
         "items": items_out,
         "breakdown": {
             "subtotal": str(member_breakdown["subtotal"]),
@@ -666,11 +668,21 @@ def payment_complete(
         stripe.api_key = settings.STRIPE_SECRET_KEY
         try:
             pi = stripe.PaymentIntent.retrieve(payment.stripe_payment_intent_id)
-            if pi.status != "succeeded":
+            if pi.status not in ("succeeded", "processing"):
                 return error_response(
                     "PAYMENT_NOT_CONFIRMED",
-                    f"Stripe payment status is '{pi.status}', not 'succeeded'.",
+                    f"Stripe payment status is '{pi.status}', not confirmed.",
                     400,
+                )
+            if pi.status == "processing":
+                payment.status = "processing"
+                db.commit()
+                return success_response(
+                    data={
+                        "payment_id": str(payment.id),
+                        "status": "processing",
+                    },
+                    message="ACH payment processing",
                 )
         except Exception as e:
             logger.error("Stripe verification failed: %s", e)
