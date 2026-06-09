@@ -30,6 +30,7 @@ from app.api.routes import (
     party_public,
     internal_jobs,
     stripe_connect,
+    plaid,
     virtual_cards,
     bill_ws,
     debug,
@@ -144,6 +145,7 @@ app.include_router(pay_public.router)
 app.include_router(party_public.router)
 app.include_router(internal_jobs.router)
 app.include_router(stripe_connect.router)
+app.include_router(plaid.router)
 app.include_router(virtual_cards.router)
 app.include_router(bill_ws.router)
 # Debug endpoints - disable in production

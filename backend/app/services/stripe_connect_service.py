@@ -358,12 +358,20 @@ class StripeConnectService:
         """
         ct = (card_token or "").strip() or None
         bt = (bank_token or "").strip() or None
-        if bool(ct) + bool(bt) != 1:
+        if bool(ct) + bool(bt) > 1:
             raise StripeConnectError(
                 "INVALID_CARD",
                 "Provide either a debit card token or a bank account token.",
             )
         account_id = self.ensure_connected_account(user)
+        skip_attach = bool(ct) + bool(bt) == 0
+        if skip_attach:
+            preview = self.refresh_account_status(user)
+            if not preview.external_account_last4:
+                raise StripeConnectError(
+                    "INVALID_CARD",
+                    "Connect a payout bank or debit card before submitting.",
+                )
 
         dob = {
             "day": int(individual["dob_day"]),
@@ -415,41 +423,40 @@ class StripeConnectService:
                 "STRIPE_ERROR", self._safe_stripe_message(e)
             )
 
-        # Attach the tokenized payout destination (debit card or bank).
-        # If the user already had an account attached, this adds a new one;
-        # `default_for_currency=True` routes payouts to the latest.
-        attach_token = ct or bt
-        if ct:
-            self._require_debit_payout_token(ct)
-        else:
-            self._require_bank_payout_token(bt)
-        try:
-            ext = stripe.Account.create_external_account(
-                account_id,
-                external_account=attach_token,
-                default_for_currency=True,
-            )
-        except stripe.error.CardError as e:
-            raise StripeConnectError(
-                "CARD_DECLINED", self._safe_stripe_message(e)
-            )
-        except stripe.error.InvalidRequestError as e:
-            code = "INVALID_BANK_ACCOUNT" if bt else "INVALID_CARD"
-            raise StripeConnectError(code, self._safe_stripe_message(e))
-        except stripe.error.StripeError as e:
-            logger.exception("stripe_connect_external_account_failed")
-            raise StripeConnectError(
-                "STRIPE_ERROR", self._safe_stripe_message(e)
-            )
+        if not skip_attach:
+            # Attach the tokenized payout destination (debit card or bank).
+            attach_token = ct or bt
+            if ct:
+                self._require_debit_payout_token(ct)
+            else:
+                self._require_bank_payout_token(bt)
+            try:
+                ext = stripe.Account.create_external_account(
+                    account_id,
+                    external_account=attach_token,
+                    default_for_currency=True,
+                )
+            except stripe.error.CardError as e:
+                raise StripeConnectError(
+                    "CARD_DECLINED", self._safe_stripe_message(e)
+                )
+            except stripe.error.InvalidRequestError as e:
+                code = "INVALID_BANK_ACCOUNT" if bt else "INVALID_CARD"
+                raise StripeConnectError(code, self._safe_stripe_message(e))
+            except stripe.error.StripeError as e:
+                logger.exception("stripe_connect_external_account_failed")
+                raise StripeConnectError(
+                    "STRIPE_ERROR", self._safe_stripe_message(e)
+                )
 
-        logger.info(
-            "stripe_connect_setup_submitted",
-            extra={
-                "user_id": str(user.id),
-                "account_id": account_id,
-                "external_account_id": getattr(ext, "id", None),
-            },
-        )
+            logger.info(
+                "stripe_connect_setup_submitted",
+                extra={
+                    "user_id": str(user.id),
+                    "account_id": account_id,
+                    "external_account_id": getattr(ext, "id", None),
+                },
+            )
 
         # If the client also sent a PaymentMethod id (card flow only),
         # attach it to the user's Stripe Customer for paying bills as a guest.
@@ -585,6 +592,12 @@ class StripeConnectService:
             requirement_error_messages=err_msgs,
             disabled_reason=disabled_reason,
         )
+
+    def attach_bank_token_from_plaid(
+        self, user: User, bank_token: str
+    ) -> ConnectedAccountStatus:
+        """Attach a Plaid-processor ``btok_`` as the default payout bank."""
+        return self.replace_external_account(user, bank_token=bank_token)
 
     def replace_external_account(
         self,

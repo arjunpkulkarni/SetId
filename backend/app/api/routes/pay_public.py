@@ -181,5 +181,6 @@ def get_public_payment(token: str, db: Session = Depends(get_db)):
             "service_fee": service_fee_info,
             "pay_url": f"{base}/pay/{token}",
             "deep_link": deep_link,
+            "plaid_enabled": settings.PLAID_ENABLED,
         }
     )

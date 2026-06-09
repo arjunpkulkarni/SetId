@@ -26,6 +26,7 @@ import {
   withPayoutSetupRetry,
 } from '../utils/payoutErrors';
 import { markPayoutVerificationSubmittedOptimistically } from '../utils/payoutOptimisticUi';
+import PlaidBankLinkButton from '../components/PlaidBankLinkButton';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -126,6 +127,8 @@ export default function SetupPayoutsScreen({ navigation, route }) {
   const [payoutChannel, setPayoutChannel] = useState('card');
   const [bankRouting, setBankRouting] = useState('');
   const [bankAccount, setBankAccount] = useState('');
+  const [plaidBankLinked, setPlaidBankLinked] = useState(false);
+  const [bankManualEntry, setBankManualEntry] = useState(false);
 
   const [cardComplete, setCardComplete] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -211,11 +214,13 @@ export default function SetupPayoutsScreen({ navigation, route }) {
     if (digitsOnly(ssnLast4).length !== 4) missing.push('SSN last 4');
     if (payoutChannel === 'card') {
       if (!cardComplete) missing.push('Debit card');
-    } else {
+    } else if (!plaidBankLinked && bankManualEntry) {
       const r = digitsOnly(bankRouting);
       if (r.length !== 9) missing.push('Routing number (9 digits)');
       const acct = String(bankAccount ?? '').replace(/\s/g, '');
       if (acct.length < 4 || acct.length > 17) missing.push('Account number');
+    } else if (!plaidBankLinked) {
+      missing.push('Linked bank account');
     }
 
     if (missing.length) {
@@ -321,6 +326,8 @@ export default function SetupPayoutsScreen({ navigation, route }) {
         } catch (pmErr) {
           if (__DEV__) console.warn('[SetupPayouts] createPaymentMethod failed', pmErr);
         }
+      } else if (plaidBankLinked) {
+        bankTokenId = null;
       } else {
         const { token, error: tokenError } = await createBankAccountTokenWithRetry(
           createToken,
@@ -366,7 +373,11 @@ export default function SetupPayoutsScreen({ navigation, route }) {
           ssn_last_4: digitsOnly(ssnLast4),
         },
         ...(paymentMethodId ? { payment_method_id: paymentMethodId } : {}),
-        ...(cardTokenId ? { card_token: cardTokenId } : { bank_token: bankTokenId }),
+        ...(cardTokenId
+          ? { card_token: cardTokenId }
+          : bankTokenId
+            ? { bank_token: bankTokenId }
+            : {}),
       };
 
       await withPayoutSetupRetry(() => stripeConnect.setupPayouts(setupPayload));
@@ -725,30 +736,55 @@ export default function SetupPayoutsScreen({ navigation, route }) {
             </>
           ) : (
             <>
-              <LabeledField
-                label="Routing number"
-                value={bankRouting}
-                onChangeText={(v) => setBankRouting(digitsOnly(v).slice(0, 9))}
-                placeholder="110000000"
-                keyboardType="number-pad"
-                maxLength={9}
-                autoComplete="off"
+              <PlaidBankLinkButton
+                purpose="payout"
+                label={plaidBankLinked ? 'Bank connected ✓' : 'Connect bank securely'}
+                disabled={plaidBankLinked}
+                onLinked={() => setPlaidBankLinked(true)}
               />
-              <LabeledField
-                label="Account number"
-                value={bankAccount}
-                onChangeText={(v) =>
-                  setBankAccount(String(v ?? '').replace(/[^\d\s]/g, ''))
-                }
-                placeholder="Checking account"
-                keyboardType="number-pad"
-                autoComplete="off"
-                secureTextEntry
-              />
-              <Text style={styles.helpText}>
-                US checking account in your name. Payouts are sent via ACH (1–3
-                business days). Same legal name as above.
-              </Text>
+              {plaidBankLinked ? (
+                <Text style={styles.helpText}>
+                  Bank linked. Submit your identity info below to finish setup.
+                </Text>
+              ) : null}
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => setBankManualEntry((v) => !v)}
+                style={styles.manualBankToggle}
+              >
+                <Text style={styles.manualBankToggleText}>
+                  {bankManualEntry
+                    ? 'Hide manual entry'
+                    : 'Enter bank manually (micro-deposit fallback)'}
+                </Text>
+              </TouchableOpacity>
+              {bankManualEntry ? (
+                <>
+                  <LabeledField
+                    label="Routing number"
+                    value={bankRouting}
+                    onChangeText={(v) => setBankRouting(digitsOnly(v).slice(0, 9))}
+                    placeholder="110000000"
+                    keyboardType="number-pad"
+                    maxLength={9}
+                    autoComplete="off"
+                  />
+                  <LabeledField
+                    label="Account number"
+                    value={bankAccount}
+                    onChangeText={(v) =>
+                      setBankAccount(String(v ?? '').replace(/[^\d\s]/g, ''))
+                    }
+                    placeholder="Checking account"
+                    keyboardType="number-pad"
+                    autoComplete="off"
+                    secureTextEntry
+                  />
+                  <Text style={styles.helpText}>
+                    Manual entry may take 1–2 days to verify. Plaid is instant when available.
+                  </Text>
+                </>
+              ) : null}
             </>
           )}
         </View>
@@ -894,6 +930,16 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     lineHeight: 16,
     marginTop: 4,
+  },
+  manualBankToggle: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  manualBankToggleText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: colors.secondary,
+    textDecorationLine: 'underline',
   },
 
   cardField: {

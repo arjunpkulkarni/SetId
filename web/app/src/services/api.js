@@ -108,6 +108,28 @@ export const getPaymentDetails = async (token) => {
   return body.data ?? body;
 };
 
+export const createPlaidLinkToken = async ({ purpose, payment_id, pay_token }) => {
+  const res = await fetch(`${API_BASE_URL}/plaid/link-token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ purpose, payment_id, pay_token }),
+  });
+  if (!res.ok) throw await buildError(res, 'Could not start bank linking');
+  const body = await res.json();
+  return body.data ?? body;
+};
+
+export const completePlaidGuestPay = async (payload) => {
+  const res = await fetch(`${API_BASE_URL}/plaid/complete-guest-pay`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw await buildError(res, 'Bank payment failed');
+  const body = await res.json();
+  return body.data ?? body;
+};
+
 // ── Helpers ──────────────────────────────────────────────────────
 
 async function buildError(res, fallback) {
